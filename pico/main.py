@@ -29,6 +29,40 @@ I2S_SD = 18
 
 led = Pin("LED", Pin.OUT)
 
+# ── Viper-accelerated DSP functions ──────────────────────
+
+
+@micropython.viper
+def extract_left_dc(buf32: ptr8, buf16: ptr8, n: int, dc: int) -> int:
+    j = 0
+    for i in range(0, n, 8):
+        sample = int(buf32[i + 2]) | (int(buf32[i + 3]) << 8)
+        if sample >= 0x8000:
+            sample -= 0x10000
+        dc = dc + (sample - dc) // 256
+        out = sample - dc
+        if out > 32767:
+            out = 32767
+        if out < -32768:
+            out = -32768
+        buf16[j] = out & 0xFF
+        buf16[j + 1] = (out >> 8) & 0xFF
+        j += 2
+    return dc
+
+
+@micropython.viper
+def compute_peak(buf: ptr8, n: int) -> int:
+    pk = 0
+    for i in range(0, n, 2):
+        sample = int(buf[i]) | (int(buf[i + 1]) << 8)
+        if sample >= 0x8000:
+            sample -= 0x10000
+        av = sample if sample >= 0 else -sample
+        if av > pk:
+            pk = av
+    return pk
+
 # ── Joystick for screen switching (Waveshare Pico LCD 1.3") ──
 
 if HAS_LCD:
@@ -293,6 +327,8 @@ def run():
     VIS_INTERVAL_MS = 2_000
     INFO_INTERVAL_MS = 60_000
 
+    dc_estimate = 0
+
     while True:
         sock = tcp_connect(wifi_ip)
         buf = bytearray(PACKET_FRAMES * 8)
@@ -309,28 +345,16 @@ def run():
                 if num_read == 0:
                     continue
 
-                # Extract left channel upper 16 bits from stereo 32-bit pairs
-                j = 0
-                for i in range(0, num_read, 8):
-                    out[j] = buf[i + 2]
-                    out[j + 1] = buf[i + 3]
-                    j += 2
+                # Extract left channel, remove DC offset (viper-accelerated)
+                dc_estimate = extract_left_dc(buf, out, num_read, dc_estimate)
+                j = num_read // 4  # stereo 32-bit pairs → mono 16-bit bytes
 
                 sock.send(out[:j])
                 total_bytes += j
 
-                # Compute peak for VU meter
-                pk = 0
-                for i in range(0, j, 2):
-                    sample = out[i] | (out[i + 1] << 8)
-                    if sample >= 0x8000:
-                        sample -= 0x10000
-                    av = sample if sample >= 0 else -sample
-                    if av > pk:
-                        pk = av
-
-                pkt_peak = pk
-                vu_level = min(pk * 220 // 32768, 220)
+                # Compute peak for VU meter (viper-accelerated)
+                pkt_peak = compute_peak(out, j)
+                vu_level = min(pkt_peak * 220 // 32768, 220)
                 vu_history[vu_pos] = vu_level
                 vu_pos = (vu_pos + 1) % len(vu_history)
 
