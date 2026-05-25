@@ -51,44 +51,7 @@ On the Pi, a **bridge service** accepts the TCP connection, pipes the audio thro
 
 ### Architecture
 
-```
-┌──────────────────┐        ┌──────────────────┐        ┌──────────────────┐
-│     INMP441      │        │    Pico 2W       │        │     Pi 4B        │
-│                  │  I2S   │                  │  TCP   │                  │
-│  Digital MEMS    │───────>│  I2S + WiFi      │───────>│  BirdNET-Pi      │
-│  microphone      │ 3 wire │                  │  WiFi  │                  │
-└──────────────────┘        └──────────────────┘        └──────────────────┘
-```
-
-```
- Detailed Signal Flow:
-
- Bird song
-      │
-      ▼
- ┌─────────┐  I2S        ┌─────────────┐  TCP stream   ┌───────────────────────────────────┐
- │  INMP441 │  digital    │  Pico 2W    │  over WiFi   │            Pi 4B                  │
- │  MEMS    │ ─────────> │  HW I2S RX  │ ───────────> │                                   │
- │  mic     │  SCK/WS/SD │  → buffer   │  22050Hz     │  ┌─────────┐    ┌──────────────┐  │
- └─────────┘  24-bit     │  → send     │  s16le PCM   │  │ Bridge  │    │  WAV files   │  │
-              data        │  → yield    │  1024 smp/pk │  │ service │───>│  (15s each)  │  │
-                          └─────────────┘              │  │ +ffmpeg │    └──────┬───────┘  │
-                                                       │  └─────────┘          │          │
-                                                       │   HP 200Hz             ▼          │
-                                                       │   LP 10kHz   ┌──────────────┐    │
-                                                       │   22k → 48k  │  BirdNET-Pi  │    │
-                                                       │              │  analysis    │    │
-                                                       │              │  + web UI    │    │
-                                                       │              └──────────────┘    │
-                                                       └───────────────────────────────────┘
-```
-
-> **Advantages over analog mic + ADC:**
-> - No ADC noise, no DC offset drift, no gain calibration
-> - Hardware-clocked sampling — 22050 Hz sustained without CPU bottleneck
-> - Full 24-bit dynamic range from the mic (truncated to 16-bit for streaming)
-> - Higher sample rate captures bird frequencies up to 11 kHz (vs 8 kHz with 16 kHz ADC)
-> - Simpler wiring — no decoupling capacitors needed
+![Architecture & Signal Flow](docs/architecture.svg)
 
 ---
 
@@ -150,26 +113,7 @@ Five signal connections plus one channel-select tie to ground. No decoupling cap
 
 ### Wiring diagram
 
-Open `pico/wiring_inmp441_pico2w.svg` in a browser for the full color diagram.
-
-```
-      INMP441 Module                        Pico 2W
-    ┌──────────────────┐              ┌──────────────────┐
-    │                  │              │                  │
-    │  VDD  ●──────────│── Red ──────│── Pin 36  3V3    │
-    │                  │              │                  │
-    │  GND  ●──────────│── Black ────│── Pin 23  GND    │
-    │                  │              │                  │
-    │  SCK  ●──────────│── Blue ─────│── Pin 21  GP16   │
-    │                  │              │                  │
-    │  WS   ●──────────│── Green ────│── Pin 22  GP17   │
-    │                  │              │                  │
-    │  SD   ●──────────│── Yellow ───│── Pin 24  GP18   │
-    │                  │              │                  │
-    │  L/R  ●──────────│── (to GND) ─│── Pin 23  GND    │
-    │                  │              │                  │
-    └──────────────────┘              └──────────────────┘
-```
+![INMP441 to Pico 2W Wiring](pico/wiring_inmp441_pico2w.svg)
 
 ### Pin mapping
 
@@ -531,19 +475,7 @@ sudo systemctl mask birdnet_recording.service
 
 ### Startup order
 
-```
- ┌─────────────────────────────────────────────────────────┐
- │  Boot sequence (all automatic via systemd)              │
- │                                                         │
- │  1. birdnet-mic-bridge      ← waits for TCP connection  │
- │  2. birdnet_analysis        ← analyzes WAV files        │
- │  3. Power on Pico 2W        ← connects and streams     │
- │                                                         │
- │  Audio flows:                                           │
- │  Pico I2S → TCP → bridge → ffmpeg → 15s WAV files      │
- │                              → birdnet_analysis          │
- └─────────────────────────────────────────────────────────┘
-```
+![Boot Sequence](docs/boot-sequence.svg)
 
 ### Step 1 — Make sure services are running on Pi
 
@@ -652,37 +584,4 @@ The SPH0645's non-standard timing (documented at [StreetSense project](https://h
 
 ## Quick reference
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        STREAM FORMAT                                │
-├─────────────────────────────────────────────────────────────────────┤
-│  Transport: TCP (port 5005)                                         │
-│  1024 × int16 samples (little-endian)  =  2048 bytes per send      │
-│  Pico sample rate: 22050 Hz (I2S hardware-clocked)                  │
-│  Sends per second: ~21                                              │
-│  Bandwidth: ~43 KB/s  (~345 kbit/s)                                 │
-│  No gain needed — I2S provides full-scale digital audio             │
-│  ffmpeg filters: HP 200Hz, LP 10kHz                                 │
-│  Resampled on Pi to: 48000 Hz (required by BirdNET)                │
-│  Output: 15-second WAV files to StreamData/                         │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│                        PIN QUICK REF                                │
-├─────────────────────────────────────────────────────────────────────┤
-│  INMP441 VDD  →  Pico Pin 36 (3V3)                                 │
-│  INMP441 GND  →  Pico Pin 23 (GND)                                 │
-│  INMP441 SCK  →  Pico Pin 21 (GP16)                                │
-│  INMP441 WS   →  Pico Pin 22 (GP17)   ← must be SCK + 1           │
-│  INMP441 SD   →  Pico Pin 24 (GP18)                                │
-│  INMP441 L/R  →  Pico Pin 23 (GND)    ← left channel              │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│                     SYSTEMD SERVICES                                 │
-├─────────────────────────────────────────────────────────────────────┤
-│  Bridge:    sudo systemctl {start|stop|status} birdnet-mic-bridge   │
-│  Analysis:  sudo systemctl {start|stop|status} birdnet_analysis     │
-│  Logs:      journalctl -u birdnet-mic-bridge -f                     │
-└─────────────────────────────────────────────────────────────────────┘
-```
+![Quick Reference](docs/quick-reference.svg)

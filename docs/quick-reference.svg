@@ -1,0 +1,101 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 420" font-family="monospace" font-size="11">
+  <title>Quick Reference</title>
+  <rect width="880" height="420" fill="#1a1a2e" rx="8"/>
+
+  <!-- ═══ Stream Format Box ═══ -->
+  <rect x="20" y="15" width="410" height="185" fill="#222233" stroke="#5555aa" stroke-width="1.5" rx="6"/>
+  <text x="225" y="36" text-anchor="middle" fill="#aaaaff" font-size="13" font-weight="bold">STREAM FORMAT</text>
+  <line x1="30" y1="44" x2="420" y2="44" stroke="#444" stroke-width="1"/>
+
+  <text x="35" y="64" fill="#ccc">Transport:</text>
+  <text x="160" y="64" fill="#fff">TCP (port 5005)</text>
+
+  <text x="35" y="82" fill="#ccc">Packet size:</text>
+  <text x="160" y="82" fill="#fff">1024 x int16 = 2048 bytes</text>
+
+  <text x="35" y="100" fill="#ccc">Sample rate:</text>
+  <text x="160" y="100" fill="#fff">22050 Hz (I2S hardware-clocked)</text>
+
+  <text x="35" y="118" fill="#ccc">Sends/sec:</text>
+  <text x="160" y="118" fill="#fff">~21</text>
+
+  <text x="35" y="136" fill="#ccc">Bandwidth:</text>
+  <text x="160" y="136" fill="#fff">~43 KB/s (~345 kbit/s)</text>
+
+  <text x="35" y="154" fill="#ccc">Gain:</text>
+  <text x="160" y="154" fill="#44cc44">None needed (full-scale I2S)</text>
+
+  <text x="35" y="172" fill="#ccc">Filters:</text>
+  <text x="160" y="172" fill="#fff">HP 200Hz, LP 10kHz</text>
+
+  <text x="35" y="190" fill="#ccc">Output:</text>
+  <text x="160" y="190" fill="#fff">48 kHz 15s WAV → StreamData/</text>
+
+  <!-- ═══ Pin Quick Ref Box ═══ -->
+  <rect x="450" y="15" width="410" height="185" fill="#222233" stroke="#55aa55" stroke-width="1.5" rx="6"/>
+  <text x="655" y="36" text-anchor="middle" fill="#aaffaa" font-size="13" font-weight="bold">PIN CONNECTIONS</text>
+  <line x1="460" y1="44" x2="850" y2="44" stroke="#444" stroke-width="1"/>
+
+  <!-- Pin rows -->
+  <text x="465" y="66" fill="#ff4444">VDD</text>
+  <text x="510" y="66" fill="#888">→</text>
+  <text x="530" y="66" fill="#fff">Pin 36 (3V3)</text>
+  <text x="680" y="66" fill="#666">Power</text>
+
+  <text x="465" y="86" fill="#666">GND</text>
+  <text x="510" y="86" fill="#888">→</text>
+  <text x="530" y="86" fill="#fff">Pin 23 (GND)</text>
+  <text x="680" y="86" fill="#666">Ground</text>
+
+  <text x="465" y="106" fill="#4488ff">SCK</text>
+  <text x="510" y="106" fill="#888">→</text>
+  <text x="530" y="106" fill="#fff">Pin 21 (GP16)</text>
+  <text x="680" y="106" fill="#666">I2S bit clock</text>
+
+  <text x="465" y="126" fill="#44cc44">WS</text>
+  <text x="510" y="126" fill="#888">→</text>
+  <text x="530" y="126" fill="#fff">Pin 22 (GP17)</text>
+  <text x="680" y="126" fill="#ffcc00" font-size="10">← must be SCK+1</text>
+
+  <text x="465" y="146" fill="#ffcc00">SD</text>
+  <text x="510" y="146" fill="#888">→</text>
+  <text x="530" y="146" fill="#fff">Pin 24 (GP18)</text>
+  <text x="680" y="146" fill="#666">I2S serial data</text>
+
+  <text x="465" y="166" fill="#aa88cc">L/R</text>
+  <text x="510" y="166" fill="#888">→</text>
+  <text x="530" y="166" fill="#fff">Pin 23 (GND)</text>
+  <text x="680" y="166" fill="#666">Left channel</text>
+
+  <text x="465" y="190" fill="#888" font-size="10">See: pico/wiring_inmp441_pico2w.svg</text>
+
+  <!-- ═══ Systemd Services Box ═══ -->
+  <rect x="20" y="215" width="410" height="185" fill="#222233" stroke="#cc8844" stroke-width="1.5" rx="6"/>
+  <text x="225" y="236" text-anchor="middle" fill="#ffcc88" font-size="13" font-weight="bold">SYSTEMD SERVICES</text>
+  <line x1="30" y1="244" x2="420" y2="244" stroke="#444" stroke-width="1"/>
+
+  <text x="35" y="268" fill="#aaffaa">Bridge:</text>
+  <text x="35" y="286" fill="#fff" font-size="10">  sudo systemctl {start|stop|status} birdnet-mic-bridge</text>
+
+  <text x="35" y="312" fill="#ffaaaa">Analysis:</text>
+  <text x="35" y="330" fill="#fff" font-size="10">  sudo systemctl {start|stop|status} birdnet_analysis</text>
+
+  <text x="35" y="356" fill="#aaaaff">Logs:</text>
+  <text x="35" y="374" fill="#fff" font-size="10">  journalctl -u birdnet-mic-bridge -f</text>
+
+  <!-- ═══ Install Box ═══ -->
+  <rect x="450" y="215" width="410" height="185" fill="#222233" stroke="#aa5555" stroke-width="1.5" rx="6"/>
+  <text x="655" y="236" text-anchor="middle" fill="#ffaaaa" font-size="13" font-weight="bold">INSTALL / UNINSTALL</text>
+  <line x1="460" y1="244" x2="850" y2="244" stroke="#444" stroke-width="1"/>
+
+  <text x="465" y="268" fill="#44cc44">Install:</text>
+  <text x="465" y="286" fill="#fff" font-size="10">  cd bridge/ &amp;&amp; sudo bash install.sh</text>
+
+  <text x="465" y="312" fill="#ff4444">Uninstall:</text>
+  <text x="465" y="330" fill="#fff" font-size="10">  sudo bash install.sh --uninstall</text>
+
+  <text x="465" y="356" fill="#ffcc00">Custom user:</text>
+  <text x="465" y="374" fill="#fff" font-size="10">  sudo bash install.sh --user pi</text>
+
+  <text x="465" y="394" fill="#888" font-size="10">  Auto-detects user and StreamData path</text>
+</svg>

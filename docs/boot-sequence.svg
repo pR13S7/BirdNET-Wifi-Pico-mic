@@ -1,0 +1,73 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 700 300" font-family="monospace" font-size="12">
+  <title>Boot Sequence &amp; Audio Flow</title>
+  <rect width="700" height="300" fill="#1a1a2e" rx="8"/>
+
+  <!-- Title -->
+  <text x="350" y="28" text-anchor="middle" fill="#e0e0e0" font-size="15" font-weight="bold">Boot Sequence (all automatic via systemd)</text>
+
+  <!-- Step 1 -->
+  <rect x="40" y="50" width="280" height="44" fill="#3d2d44" stroke="#aa77cc" stroke-width="1.5" rx="6"/>
+  <text x="55" y="68" fill="#ddaaff" font-size="12" font-weight="bold">1.</text>
+  <text x="75" y="68" fill="#ddaaff" font-size="12" font-weight="bold">birdnet-mic-bridge</text>
+  <text x="75" y="85" fill="#999" font-size="10">Starts on boot, waits for TCP connection</text>
+
+  <!-- Step 2 -->
+  <rect x="40" y="104" width="280" height="44" fill="#442d2d" stroke="#aa5555" stroke-width="1.5" rx="6"/>
+  <text x="55" y="122" fill="#ffaaaa" font-size="12" font-weight="bold">2.</text>
+  <text x="75" y="122" fill="#ffaaaa" font-size="12" font-weight="bold">birdnet_analysis</text>
+  <text x="75" y="139" fill="#999" font-size="10">Watches StreamData/ for new WAV files</text>
+
+  <!-- Step 3 -->
+  <rect x="40" y="158" width="280" height="44" fill="#2d442d" stroke="#55aa55" stroke-width="1.5" rx="6"/>
+  <text x="55" y="176" fill="#aaffaa" font-size="12" font-weight="bold">3.</text>
+  <text x="75" y="176" fill="#aaffaa" font-size="12" font-weight="bold">Power on Pico 2W</text>
+  <text x="75" y="193" fill="#999" font-size="10">Connects WiFi → TCP → starts streaming</text>
+
+  <!-- Divider -->
+  <line x1="350" y1="50" x2="350" y2="202" stroke="#444" stroke-width="1" stroke-dasharray="4,3"/>
+
+  <!-- Audio flow -->
+  <text x="530" y="60" text-anchor="middle" fill="#aaa" font-size="11">Audio Flow</text>
+
+  <rect x="380" y="76" width="110" height="30" fill="#2d442d" stroke="#55aa55" stroke-width="1" rx="4"/>
+  <text x="435" y="95" text-anchor="middle" fill="#aaffaa" font-size="10">Pico I2S</text>
+
+  <line x1="490" y1="91" x2="520" y2="91" stroke="#ffcc00" stroke-width="1.5" marker-end="url(#bsArrow)"/>
+
+  <rect x="520" y="76" width="60" height="30" fill="#2d2d44" stroke="#7777cc" stroke-width="1" rx="4"/>
+  <text x="550" y="95" text-anchor="middle" fill="#aaaaff" font-size="10">TCP</text>
+
+  <line x1="580" y1="91" x2="610" y2="91" stroke="#ffcc00" stroke-width="1.5" marker-end="url(#bsArrow)"/>
+
+  <rect x="380" y="120" width="110" height="30" fill="#3d2d44" stroke="#aa77cc" stroke-width="1" rx="4"/>
+  <text x="435" y="139" text-anchor="middle" fill="#ddaaff" font-size="10">Bridge+ffmpeg</text>
+
+  <line x1="490" y1="135" x2="520" y2="135" stroke="#ff8844" stroke-width="1.5" marker-end="url(#bsArrowO)"/>
+
+  <rect x="520" y="120" width="100" height="30" fill="#44332d" stroke="#cc8844" stroke-width="1" rx="4"/>
+  <text x="570" y="139" text-anchor="middle" fill="#ffcc88" font-size="10">15s WAV files</text>
+
+  <line x1="570" y1="150" x2="570" y2="166" stroke="#ff8844" stroke-width="1.5" marker-end="url(#bsArrowO)"/>
+
+  <rect x="520" y="166" width="100" height="30" fill="#442d2d" stroke="#aa5555" stroke-width="1" rx="4"/>
+  <text x="570" y="185" text-anchor="middle" fill="#ffaaaa" font-size="10">BirdNET AI</text>
+
+  <!-- Connect flow arrow from TCP to bridge -->
+  <path d="M 640 91 C 660 91, 660 135, 490 135" fill="none" stroke="#ffcc00" stroke-width="1.5" stroke-dasharray="4,2"/>
+  <text x="640" y="85" fill="#888" font-size="9">WiFi</text>
+
+  <!-- Summary bar -->
+  <rect x="40" y="225" width="620" height="55" fill="#222233" stroke="#444" stroke-width="1" rx="5"/>
+  <text x="350" y="248" text-anchor="middle" fill="#e0e0e0" font-size="12" font-weight="bold">Pico I2S → TCP over WiFi → Bridge → ffmpeg → 15s WAV → birdnet_analysis</text>
+  <text x="350" y="268" text-anchor="middle" fill="#888" font-size="10">All services auto-restart on failure · Pico reconnects every 3 seconds if disconnected</text>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="bsArrow" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+      <polygon points="0 0, 7 2.5, 0 5" fill="#ffcc00"/>
+    </marker>
+    <marker id="bsArrowO" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+      <polygon points="0 0, 7 2.5, 0 5" fill="#ff8844"/>
+    </marker>
+  </defs>
+</svg>

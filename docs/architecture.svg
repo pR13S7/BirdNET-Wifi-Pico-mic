@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 480" font-family="monospace" font-size="12">
+  <title>BirdNET Wireless Mic — Architecture &amp; Signal Flow</title>
+  <rect width="920" height="480" fill="#1a1a2e" rx="8"/>
+
+  <!-- Title -->
+  <text x="460" y="30" text-anchor="middle" fill="#e0e0e0" font-size="16" font-weight="bold">Architecture &amp; Signal Flow</text>
+
+  <!-- ═══ Top row: 3-box overview ═══ -->
+
+  <!-- INMP441 box -->
+  <rect x="40" y="60" width="200" height="90" fill="#2d2d44" stroke="#7777cc" stroke-width="2" rx="8"/>
+  <text x="140" y="85" text-anchor="middle" fill="#aaaaff" font-size="13" font-weight="bold">INMP441</text>
+  <text x="140" y="105" text-anchor="middle" fill="#ccc" font-size="11">Digital I2S MEMS</text>
+  <text x="140" y="120" text-anchor="middle" fill="#ccc" font-size="11">Microphone</text>
+  <text x="140" y="140" text-anchor="middle" fill="#888" font-size="10">61 dB SNR · 1.8-3.3V</text>
+
+  <!-- Arrow 1 -->
+  <line x1="240" y1="105" x2="330" y2="105" stroke="#44cc44" stroke-width="2" marker-end="url(#arrowG)"/>
+  <text x="285" y="95" text-anchor="middle" fill="#44cc44" font-size="10" font-weight="bold">I2S</text>
+  <text x="285" y="125" text-anchor="middle" fill="#888" font-size="9">SCK/WS/SD</text>
+
+  <!-- Pico 2W box -->
+  <rect x="330" y="60" width="220" height="90" fill="#2d442d" stroke="#55aa55" stroke-width="2" rx="8"/>
+  <text x="440" y="85" text-anchor="middle" fill="#aaffaa" font-size="13" font-weight="bold">Pico 2W</text>
+  <text x="440" y="105" text-anchor="middle" fill="#ccc" font-size="11">HW I2S RX + WiFi</text>
+  <text x="440" y="120" text-anchor="middle" fill="#ccc" font-size="11">MicroPython</text>
+  <text x="440" y="140" text-anchor="middle" fill="#888" font-size="10">22050 Hz · s16le mono</text>
+
+  <!-- Arrow 2 -->
+  <line x1="550" y1="105" x2="640" y2="105" stroke="#ffcc00" stroke-width="2" marker-end="url(#arrowY)"/>
+  <text x="595" y="95" text-anchor="middle" fill="#ffcc00" font-size="10" font-weight="bold">TCP</text>
+  <text x="595" y="125" text-anchor="middle" fill="#888" font-size="9">WiFi · port 5005</text>
+
+  <!-- Pi 4B box -->
+  <rect x="640" y="60" width="240" height="90" fill="#442d2d" stroke="#aa5555" stroke-width="2" rx="8"/>
+  <text x="760" y="85" text-anchor="middle" fill="#ffaaaa" font-size="13" font-weight="bold">Raspberry Pi 4B</text>
+  <text x="760" y="105" text-anchor="middle" fill="#ccc" font-size="11">BirdNET-Pi</text>
+  <text x="760" y="120" text-anchor="middle" fill="#ccc" font-size="11">Analysis + Web UI</text>
+  <text x="760" y="140" text-anchor="middle" fill="#888" font-size="10">48 kHz · 15s WAV files</text>
+
+  <!-- ═══ Detailed signal flow ═══ -->
+
+  <line x1="40" y1="180" x2="880" y2="180" stroke="#444" stroke-width="1"/>
+  <text x="460" y="200" text-anchor="middle" fill="#aaa" font-size="11">Detailed Signal Flow</text>
+
+  <!-- Bird -->
+  <text x="60" y="240" fill="#ffcc00" font-size="20">&#x1F426;</text>
+  <text x="55" y="260" fill="#888" font-size="10">Bird song</text>
+
+  <!-- Down arrow from bird -->
+  <line x1="70" y1="265" x2="70" y2="290" stroke="#888" stroke-width="1.5" marker-end="url(#arrowW)"/>
+
+  <!-- INMP441 detail -->
+  <rect x="30" y="295" width="130" height="60" fill="#2d2d44" stroke="#7777cc" stroke-width="1.5" rx="5"/>
+  <text x="95" y="315" text-anchor="middle" fill="#aaaaff" font-size="11" font-weight="bold">INMP441</text>
+  <text x="95" y="332" text-anchor="middle" fill="#ccc" font-size="10">I2S digital out</text>
+  <text x="95" y="348" text-anchor="middle" fill="#888" font-size="9">24-bit · up to 48kHz</text>
+
+  <!-- Arrow to Pico -->
+  <line x1="160" y1="325" x2="220" y2="325" stroke="#44cc44" stroke-width="2" marker-end="url(#arrowG)"/>
+  <text x="190" y="315" text-anchor="middle" fill="#44cc44" font-size="9">I2S</text>
+
+  <!-- Pico detail -->
+  <rect x="220" y="285" width="170" height="80" fill="#2d442d" stroke="#55aa55" stroke-width="1.5" rx="5"/>
+  <text x="305" y="305" text-anchor="middle" fill="#aaffaa" font-size="11" font-weight="bold">Pico 2W</text>
+  <text x="305" y="322" text-anchor="middle" fill="#ccc" font-size="10">HW I2S → buffer</text>
+  <text x="305" y="338" text-anchor="middle" fill="#ccc" font-size="10">→ TCP send</text>
+  <text x="305" y="354" text-anchor="middle" fill="#888" font-size="9">22050 Hz · 1024 smp/pkt</text>
+
+  <!-- Arrow to Bridge -->
+  <line x1="390" y1="325" x2="450" y2="325" stroke="#ffcc00" stroke-width="2" marker-end="url(#arrowY)"/>
+  <text x="420" y="315" text-anchor="middle" fill="#ffcc00" font-size="9">TCP</text>
+
+  <!-- Bridge detail -->
+  <rect x="450" y="285" width="170" height="80" fill="#3d2d44" stroke="#aa77cc" stroke-width="1.5" rx="5"/>
+  <text x="535" y="305" text-anchor="middle" fill="#ddaaff" font-size="11" font-weight="bold">Bridge + ffmpeg</text>
+  <text x="535" y="322" text-anchor="middle" fill="#ccc" font-size="10">HP 200Hz · LP 10kHz</text>
+  <text x="535" y="338" text-anchor="middle" fill="#ccc" font-size="10">22050 → 48000 Hz</text>
+  <text x="535" y="354" text-anchor="middle" fill="#888" font-size="9">segment: 15s WAV files</text>
+
+  <!-- Arrow to WAV -->
+  <line x1="620" y1="325" x2="680" y2="325" stroke="#ff8844" stroke-width="2" marker-end="url(#arrowO)"/>
+  <text x="650" y="315" text-anchor="middle" fill="#ff8844" font-size="9">WAV</text>
+
+  <!-- BirdNET detail -->
+  <rect x="680" y="285" width="200" height="80" fill="#442d2d" stroke="#aa5555" stroke-width="1.5" rx="5"/>
+  <text x="780" y="305" text-anchor="middle" fill="#ffaaaa" font-size="11" font-weight="bold">BirdNET-Pi Analysis</text>
+  <text x="780" y="322" text-anchor="middle" fill="#ccc" font-size="10">Neural network classifier</text>
+  <text x="780" y="338" text-anchor="middle" fill="#ccc" font-size="10">Species identification</text>
+  <text x="780" y="354" text-anchor="middle" fill="#888" font-size="9">Web UI · notifications</text>
+
+  <!-- ═══ Bottom: advantages ═══ -->
+
+  <line x1="40" y1="395" x2="880" y2="395" stroke="#444" stroke-width="1"/>
+  <text x="460" y="415" text-anchor="middle" fill="#aaa" font-size="11">Key Advantages of I2S over Analog ADC</text>
+
+  <text x="60" y="440" fill="#44cc44" font-size="11">&#x2713; No ADC noise</text>
+  <text x="230" y="440" fill="#44cc44" font-size="11">&#x2713; Hardware-clocked 22050 Hz</text>
+  <text x="480" y="440" fill="#44cc44" font-size="11">&#x2713; No gain calibration</text>
+  <text x="690" y="440" fill="#44cc44" font-size="11">&#x2713; 5 wires, no caps</text>
+
+  <text x="60" y="462" fill="#44cc44" font-size="11">&#x2713; 24-bit dynamic range</text>
+  <text x="230" y="462" fill="#44cc44" font-size="11">&#x2713; CPU free for WiFi</text>
+  <text x="480" y="462" fill="#44cc44" font-size="11">&#x2713; Bird freq up to 11 kHz</text>
+  <text x="690" y="462" fill="#44cc44" font-size="11">&#x2713; No DC offset drift</text>
+
+  <!-- Arrow markers -->
+  <defs>
+    <marker id="arrowG" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#44cc44"/>
+    </marker>
+    <marker id="arrowY" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ffcc00"/>
+    </marker>
+    <marker id="arrowO" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#ff8844"/>
+    </marker>
+    <marker id="arrowW" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#888"/>
+    </marker>
+  </defs>
+</svg>
