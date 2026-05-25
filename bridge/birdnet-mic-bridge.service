@@ -1,0 +1,16 @@
+[Unit]
+Description=Pico 2W wireless mic bridge for BirdNET-Pi
+After=network-online.target
+Wants=network-online.target
+Before=birdnet_analysis.service
+
+[Service]
+Type=simple
+User=pr13s7
+ExecStart=/usr/bin/python3 /opt/mic_bridge/birdnet_mic_bridge.py
+Environment=RECS_DIR=/home/pr13s7/BirdSongs/StreamData
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

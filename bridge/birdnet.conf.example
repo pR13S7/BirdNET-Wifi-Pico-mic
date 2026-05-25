@@ -1,0 +1,18 @@
+# BirdNET-Pi configuration changes for wireless Pico 2W mic
+# Edit with: sudo nano /etc/birdnet/birdnet.conf
+#
+# Only CONFIDENCE needs changing — the bridge writes WAV files directly
+# to StreamData, so no REC_CARD or CHANNELS settings are needed.
+
+CONFIDENCE=0.5
+
+# After editing, restart the analysis service:
+#   sudo systemctl restart birdnet_analysis.service
+#
+# IMPORTANT: Mask the recording service (disable alone is not enough,
+# BirdNET's watchdog re-enables it):
+#   sudo systemctl stop birdnet_recording.service
+#   sudo systemctl mask birdnet_recording.service
+#
+# To undo later:
+#   sudo systemctl unmask birdnet_recording.service
