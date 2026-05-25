@@ -18,6 +18,8 @@ SERVER_PORT = 5005
 
 SAMPLE_RATE = 22050
 PACKET_FRAMES = 1024
+I2S_BITS = 32
+I2S_FMT = I2S.STEREO
 RECONNECT_DELAY = 3
 
 # I2S pins (WS must be SCK + 1 on Pico)
@@ -30,10 +32,10 @@ led = Pin("LED", Pin.OUT)
 # ── Joystick for screen switching (Waveshare Pico LCD 1.3") ──
 
 if HAS_LCD:
-    JOY_UP = Pin(2, Pin.IN, Pin.PULL_UP)
-    JOY_DOWN = Pin(18, Pin.IN, Pin.PULL_UP)
+    BTN_PREV = Pin(2, Pin.IN, Pin.PULL_UP)   # Joystick UP
+    BTN_NEXT = Pin(15, Pin.IN, Pin.PULL_UP)  # Key A
 else:
-    JOY_UP = JOY_DOWN = None
+    BTN_PREV = BTN_NEXT = None
 
 SCREEN_INFO = 0
 SCREEN_VU = 1
@@ -190,15 +192,15 @@ def check_joystick():
     if not HAS_LCD:
         return False
     changed = False
-    if JOY_UP.value() == 0:
+    if BTN_PREV.value() == 0:
         current_screen = (current_screen - 1) % SCREEN_COUNT
         changed = True
-        while JOY_UP.value() == 0:
+        while BTN_PREV.value() == 0:
             time.sleep_ms(10)
-    elif JOY_DOWN.value() == 0:
+    elif BTN_NEXT.value() == 0:
         current_screen = (current_screen + 1) % SCREEN_COUNT
         changed = True
-        while JOY_DOWN.value() == 0:
+        while BTN_NEXT.value() == 0:
             time.sleep_ms(10)
     return changed
 
@@ -279,10 +281,10 @@ def run():
         ws=Pin(I2S_WS),
         sd=Pin(I2S_SD),
         mode=I2S.RX,
-        bits=16,
-        format=I2S.MONO,
+        bits=I2S_BITS,
+        format=I2S_FMT,
         rate=SAMPLE_RATE,
-        ibuf=20000,
+        ibuf=40000,
     )
 
     print(f"I2S mic initialized: INMP441 at {SAMPLE_RATE} Hz")
@@ -293,7 +295,8 @@ def run():
 
     while True:
         sock = tcp_connect(wifi_ip)
-        buf = bytearray(PACKET_FRAMES * 2)
+        buf = bytearray(PACKET_FRAMES * 8)
+        out = bytearray(PACKET_FRAMES * 2)
         stream_start = time.ticks_ms()
         total_bytes = 0
         last_display = 0
@@ -306,13 +309,20 @@ def run():
                 if num_read == 0:
                     continue
 
-                sock.send(buf[:num_read])
-                total_bytes += num_read
+                # Extract left channel upper 16 bits from stereo 32-bit pairs
+                j = 0
+                for i in range(0, num_read, 8):
+                    out[j] = buf[i + 2]
+                    out[j + 1] = buf[i + 3]
+                    j += 2
+
+                sock.send(out[:j])
+                total_bytes += j
 
                 # Compute peak for VU meter
                 pk = 0
-                for i in range(0, num_read, 2):
-                    sample = buf[i] | (buf[i + 1] << 8)
+                for i in range(0, j, 2):
+                    sample = out[i] | (out[i + 1] << 8)
                     if sample >= 0x8000:
                         sample -= 0x10000
                     av = sample if sample >= 0 else -sample
@@ -326,9 +336,9 @@ def run():
 
                 # Waveform buffer (downsample)
                 if HAS_LCD:
-                    step = num_read // 2 // 240 or 1
-                    for j in range(0, min(num_read, 480), step * 2):
-                        s = buf[j] | (buf[j + 1] << 8)
+                    step = j // 2 // 240 or 1
+                    for wi in range(0, min(j, 480), step * 2):
+                        s = out[wi] | (out[wi + 1] << 8)
                         if s >= 0x8000:
                             s -= 0x10000
                         wave_buf[wave_idx] = s
@@ -370,10 +380,10 @@ def run():
             ws=Pin(I2S_WS),
             sd=Pin(I2S_SD),
             mode=I2S.RX,
-            bits=16,
-            format=I2S.MONO,
+            bits=I2S_BITS,
+            format=I2S_FMT,
             rate=SAMPLE_RATE,
-            ibuf=20000,
+            ibuf=40000,
         )
         time.sleep(1)
 
