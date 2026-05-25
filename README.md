@@ -1,8 +1,8 @@
 # Wireless Microphone Streaming to BirdNET-Pi
 
-> **Build Guide** — Stream audio from an SPH8878LR5H-1 MEMS mic on a Pico 2W over WiFi to a Raspberry Pi 4B running [BirdNET-Pi](https://github.com/Nachtzuster/BirdNET-Pi) for realtime bird classification.
+> **Build Guide** — Stream audio from an INMP441 I2S MEMS mic on a Pico 2W over WiFi to a Raspberry Pi 4B running [BirdNET-Pi](https://github.com/Nachtzuster/BirdNET-Pi) for realtime bird classification.
 
-**Stack:** `Pico 2W (MicroPython)` · `Pi 4B (BirdNET-Pi)` · `SPH8878LR5H-1` · `TCP → direct WAV`
+**Stack:** `Pico 2W (MicroPython)` · `Pi 4B (BirdNET-Pi)` · `INMP441 I2S` · `TCP → direct WAV`
 
 ---
 
@@ -13,8 +13,10 @@ pico 2w/
 ├── README.md                              ← this file
 ├── pico/                                  ← upload to Pico 2W via Thonny
 │   ├── main.py                            ← streaming firmware (with LCD support)
-│   └── lcd.py                             ← Waveshare LCD 1.3" driver (optional)
+│   ├── lcd.py                             ← Waveshare LCD 1.3" driver (optional)
+│   └── wiring_inmp441_pico2w.svg          ← wiring diagram (open in browser)
 └── bridge/                                ← deploy to Pi 4B
+    ├── install.sh                         ← automated installer (sudo bash install.sh)
     ├── birdnet_mic_bridge.py              ← TCP → WAV bridge service
     ├── birdnet-mic-bridge.service         ← systemd unit file
     └── birdnet.conf.example               ← BirdNET-Pi config changes
@@ -37,24 +39,24 @@ pico 2w/
 7. [BirdNET-Pi configuration](#7-birdnet-pi-configuration)
 8. [Running it](#8-running-it)
 9. [Troubleshooting & improvements](#9-troubleshooting--improvements)
-10. [Appendix: Design decisions from open-source research](#appendix-design-decisions-from-open-source-research)
+10. [Appendix: Why INMP441?](#appendix-why-inmp441)
 
 ---
 
 ## 1. How it works
 
-The SPH8878LR5H-1 is an **analog mic** — it outputs a varying voltage, not digital data. The Pico 2W samples that voltage through its built-in ADC, applies gain and DC offset calibration, packs the samples into buffers, and streams them over a **TCP connection** to your Pi 4B.
+The INMP441 is a **digital I2S microphone** — it outputs a clocked digital bitstream, not an analog voltage. The Pico 2W's hardware I2S peripheral (driven by PIO) captures the audio data directly into memory buffers at 22050 Hz. The CPU is free for WiFi — no manual ADC timing or gain calibration needed.
 
-On the Pi, a **bridge service** accepts the TCP connection, pipes the audio through `ffmpeg` for filtering (two stacked high-pass at 500 Hz, low-pass at 7.5 kHz, 2× gain) and resampling (16 kHz → 48 kHz), and writes **15-second WAV files** directly to BirdNET-Pi's `StreamData` folder. The analysis service picks them up automatically — no ALSA loopback needed.
+On the Pi, a **bridge service** accepts the TCP connection, pipes the audio through `ffmpeg` for gentle filtering (high-pass at 200 Hz, low-pass at 10 kHz) and resampling (22050 Hz → 48 kHz), and writes **15-second WAV files** directly to BirdNET-Pi's `StreamData` folder.
 
 ### Architecture
 
 ```
 ┌──────────────────┐        ┌──────────────────┐        ┌──────────────────┐
-│   SPH8878LR5H-1  │        │    Pico 2W       │        │     Pi 4B        │
-│                  │ analog │                  │  TCP   │                  │
-│  Analog MEMS mic │───────>│  ADC + WiFi      │───────>│  BirdNET-Pi      │
-│                  │ 0–3.3V │                  │  WiFi  │                  │
+│     INMP441      │        │    Pico 2W       │        │     Pi 4B        │
+│                  │  I2S   │                  │  TCP   │                  │
+│  Digital MEMS    │───────>│  I2S + WiFi      │───────>│  BirdNET-Pi      │
+│  microphone      │ 3 wire │                  │  WiFi  │                  │
 └──────────────────┘        └──────────────────┘        └──────────────────┘
 ```
 
@@ -64,24 +66,29 @@ On the Pi, a **bridge service** accepts the TCP connection, pipes the audio thro
  Bird song
       │
       ▼
- ┌─────────┐  Analog     ┌─────────────┐  TCP stream   ┌───────────────────────────────────┐
- │  MEMS    │  voltage    │  Pico 2W    │  over WiFi   │            Pi 4B                  │
- │  Mic     │ ─────────> │  12-bit ADC │ ───────────> │                                   │
- │  +OpAmp  │  0–3.3V    │  → calibrate│  16kHz mono  │  ┌─────────┐    ┌──────────────┐  │
- └─────────┘  ×64 gain   │  → 2x gain  │  s16le PCM   │  │ Bridge  │    │  WAV files   │  │
-                          │  → pack     │  512 smp/pkt │  │ service │───>│  (15s each)  │  │
-                          │  → send     │              │  │ +ffmpeg │    └──────┬───────┘  │
-                          │  → yield    │              │  └─────────┘          │          │
-                          └─────────────┘              │   2x HP 500Hz          ▼          │
-                                                       │   LP 7500Hz  ┌──────────────┐    │
-                                                       │   ×2 gain    │  BirdNET-Pi  │    │
-                                                       │   16k → 48k  │  analysis    │    │
+ ┌─────────┐  I2S        ┌─────────────┐  TCP stream   ┌───────────────────────────────────┐
+ │  INMP441 │  digital    │  Pico 2W    │  over WiFi   │            Pi 4B                  │
+ │  MEMS    │ ─────────> │  HW I2S RX  │ ───────────> │                                   │
+ │  mic     │  SCK/WS/SD │  → buffer   │  22050Hz     │  ┌─────────┐    ┌──────────────┐  │
+ └─────────┘  24-bit     │  → send     │  s16le PCM   │  │ Bridge  │    │  WAV files   │  │
+              data        │  → yield    │  1024 smp/pk │  │ service │───>│  (15s each)  │  │
+                          └─────────────┘              │  │ +ffmpeg │    └──────┬───────┘  │
+                                                       │  └─────────┘          │          │
+                                                       │   HP 200Hz             ▼          │
+                                                       │   LP 10kHz   ┌──────────────┐    │
+                                                       │   22k → 48k  │  BirdNET-Pi  │    │
+                                                       │              │  analysis    │    │
                                                        │              │  + web UI    │    │
                                                        │              └──────────────┘    │
                                                        └───────────────────────────────────┘
 ```
 
-> **ℹ Info:** TCP guarantees all audio data arrives in order with no gaps — no glitches from dropped packets. The bridge writes WAV files directly to BirdNET-Pi's StreamData folder, bypassing ALSA loopback entirely. This eliminates device locking issues and simplifies the setup. Both the Pico and the bridge handle disconnections gracefully with automatic reconnection.
+> **Advantages over analog mic + ADC:**
+> - No ADC noise, no DC offset drift, no gain calibration
+> - Hardware-clocked sampling — 22050 Hz sustained without CPU bottleneck
+> - Full 24-bit dynamic range from the mic (truncated to 16-bit for streaming)
+> - Higher sample rate captures bird frequencies up to 11 kHz (vs 8 kHz with 16 kHz ADC)
+> - Simpler wiring — no decoupling capacitors needed
 
 ---
 
@@ -90,8 +97,8 @@ On the Pi, a **bridge service** accepts the TCP connection, pipes the audio thro
 ### Hardware
 
 - Raspberry Pi **Pico 2W** (the W variant with WiFi)
-- SparkFun Analog MEMS Microphone Breakout — **SPH8878LR5H-1** (BOB-19389)
-- 3 short jumper wires (red, black, yellow)
+- **INMP441** I2S MEMS Microphone module (available on AliExpress, Amazon, eBay — ~$2-5)
+- 5 short jumper wires (or solder directly)
 - Breadboard (optional, for prototyping)
 - Raspberry Pi **4B** — already on your WiFi network, running BirdNET-Pi
 
@@ -102,61 +109,82 @@ On the Pi, a **bridge service** accepts the TCP connection, pipes the audio thro
 - Thonny or `mpremote` to upload code to the Pico
 - `ffmpeg` on the Pi (`sudo apt install ffmpeg` — may already be present)
 
-> **⚠ Warning:** Make sure you have the **Pico 2W**, not the plain Pico 2. Only the W variant has the WiFi chip. You can also use the original Pico W — the code is identical.
+> **Warning:** Make sure you have the **Pico 2W**, not the plain Pico 2. Only the W variant has the WiFi chip. You can also use the original Pico W — the code is identical.
 
 ---
 
 ## 3. Microphone specs
 
-Relevant specs for this project:
+### INMP441 — Key parameters
 
-| Parameter                    | Value                                        |
-| ---------------------------- | -------------------------------------------- |
-| Supply voltage (VCC)         | 2.3V – 3.6V → use Pico's **3.3V**            |
-| Current draw                 | ~265 µA (very low power)                     |
-| Output at idle               | ½ × VCC ≈ **1.65V** (the ADC midpoint)       |
-| Peak-to-peak at arm's length | ~200 mV around the 1.65V center              |
-| Frequency range              | 7 Hz – 36 kHz                                |
-| SNR                          | 66 dB (good clarity for voice/birds)         |
-| Gain (on-board op-amp)       | ×64 — already amplified, no extra amp needed |
-| Pico 2W ADC input range      | 0 – 3.3V (12-bit, 4096 steps)                |
+| Parameter            | Value                                           |
+| -------------------- | ----------------------------------------------- |
+| Interface            | I2S (digital) — SCK, WS, SD                    |
+| Supply voltage (VDD) | 1.8V – 3.3V → use Pico's **3.3V**              |
+| Current draw         | ~1.4 mA                                         |
+| SNR                  | 61 dB(A)                                        |
+| Sensitivity          | -26 dBFS                                        |
+| Frequency range      | 60 Hz – 15 kHz                                  |
+| Data format          | 24-bit I2S, MSB-first                           |
+| Channel select (L/R) | Low = left channel, High = right channel        |
+| Sample rates         | Up to 48 kHz (we use 22050 Hz)                  |
 
-The op-amp on the breakout board keeps the output biased at half VCC when quiet. Your ADC readings will hover around **2048** in silence and swing above/below with sound.
+> **Tip:** The 60 Hz – 15 kHz range easily covers typical bird vocalizations (1 kHz – 10 kHz). At 22050 Hz sample rate, we capture frequencies up to ~11 kHz — more than enough for most species.
 
-> **✦ Tip:** The 7 Hz – 36 kHz range easily covers the typical bird vocalization spectrum (1 kHz – 10 kHz). The 66 dB SNR is sufficient for outdoor bird monitoring at moderate distances.
+### Why I2S beats analog ADC for this project
+
+| Aspect           | Analog (SPH8878LR5H-1 + ADC) | Digital (INMP441 I2S)       |
+| ---------------- | ----------------------------- | --------------------------- |
+| Noise floor      | ADC + WiFi switching noise    | Clean digital signal        |
+| Sample rate      | 16 kHz max (MicroPython CPU)  | 22050+ Hz (hardware PIO)   |
+| Gain calibration | Required (DC offset + gain)   | Not needed                  |
+| Wiring           | 3 wires + 2 caps recommended  | 5 wires, no caps            |
+| Dynamic range    | 12-bit effective              | 24-bit from mic             |
+| CPU load         | High (manual timing loop)     | Low (DMA fills buffer)      |
 
 ---
 
 ## 4. Wiring the mic to the Pico 2W
 
-Only three connections are needed. The breakout already has an op-amp and bias resistors — nothing else is required.
+Five signal connections plus one channel-select tie to ground. No decoupling capacitors needed — the INMP441 is a digital device that's immune to power rail noise affecting the audio signal.
 
 ### Wiring diagram
 
+Open `pico/wiring_inmp441_pico2w.svg` in a browser for the full color diagram.
+
 ```
-        Mic Breakout                         Pico 2W
-      ┌──────────────┐                 ┌──────────────────┐
-      │              │                 │                  │
-      │  VCC  ●──────│── Red ─────────│── Pin 36  3V3    │
-      │              │                 │                  │
-      │  GND  ●──────│── Black ───────│── Pin 38  GND    │
-      │              │                 │                  │
-      │  AUD  ●──────│── Yellow ──────│── Pin 31  GP26   │
-      │              │                 │     (ADC0)       │
-      └──────────────┘                 └──────────────────┘
+      INMP441 Module                        Pico 2W
+    ┌──────────────────┐              ┌──────────────────┐
+    │                  │              │                  │
+    │  VDD  ●──────────│── Red ──────│── Pin 36  3V3    │
+    │                  │              │                  │
+    │  GND  ●──────────│── Black ────│── Pin 23  GND    │
+    │                  │              │                  │
+    │  SCK  ●──────────│── Blue ─────│── Pin 21  GP16   │
+    │                  │              │                  │
+    │  WS   ●──────────│── Green ────│── Pin 22  GP17   │
+    │                  │              │                  │
+    │  SD   ●──────────│── Yellow ───│── Pin 24  GP18   │
+    │                  │              │                  │
+    │  L/R  ●──────────│── (to GND) ─│── Pin 23  GND    │
+    │                  │              │                  │
+    └──────────────────┘              └──────────────────┘
 ```
 
 ### Pin mapping
 
-| Mic breakout pin | Pico 2W pin          | Wire      | Notes                                       |
-| ---------------- | -------------------- | --------- | ------------------------------------------- |
-| **VCC**          | Pin 36 — 3V3(OUT)    | 🔴 Red    | 3.3V supply. **Never use 5V** — max is 3.6V |
-| **GND**          | Pin 38 — GND         | ⚫ Black   | Any GND pin works                           |
-| **AUD**          | Pin 31 — GP26 (ADC0) | 🟡 Yellow | Analog audio signal                         |
+| INMP441 pin | Pico 2W pin         | Wire      | Notes                                          |
+| ----------- | ------------------- | --------- | ---------------------------------------------- |
+| **VDD**     | Pin 36 — 3V3(OUT)   | Red       | 3.3V supply. Range: 1.8V – 3.3V               |
+| **GND**     | Pin 23 — GND        | Black     | Ground                                         |
+| **SCK**     | Pin 21 — GP16       | Blue      | I2S serial clock (bit clock)                   |
+| **WS**      | Pin 22 — GP17       | Green     | I2S word select (LRCLK). **Must be SCK + 1**  |
+| **SD**      | Pin 24 — GP18       | Yellow    | I2S serial data output                         |
+| **L/R**     | Pin 23 — GND        | (jumper)  | Tied low = output on left channel              |
 
-> **✦ Tip:** GP26 (ADC0) is the cleanest ADC pin on the Pico — it has the least noise from the digital side. GP27 (ADC1) and GP28 (ADC2) also work fine if GP26 is occupied. **Avoid GP29** — it's used for VSYS monitoring.
+> **Important:** On the Pico 2W with MicroPython, the WS pin number **must** be exactly one greater than the SCK pin number. GP16/GP17 satisfies this constraint.
 
-The mic's audio input port is on the **bottom** of the breakout board — make sure nothing is covering the tiny hole on the underside when you mount it.
+> **Tip:** The INMP441's sound port (tiny hole) is on the **bottom** of the module. When mounting, ensure nothing covers the underside.
 
 ---
 
@@ -175,8 +203,10 @@ Open [Thonny](https://thonny.org), go to **Run → Configure interpreter**, sele
 ### `main.py` (on Pico 2W)
 
 ```python
-import network, socket, time
-from machine import ADC, Pin
+import time
+import socket
+import network
+from machine import I2S, Pin
 
 # ── Configuration ─────────────────────────────────────────
 WIFI_SSID     = "YOUR_WIFI_SSID"
@@ -185,10 +215,14 @@ WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 SERVER_IP   = "192.168.1.XXX"   # ← your Pi 4B IP address
 SERVER_PORT = 5005
 
-SAMPLE_RATE   = 16000     # Hz — see "Why 16000 Hz?" below
-PACKET_FRAMES = 512       # samples per send (~32 ms at 16000 Hz)
+SAMPLE_RATE   = 22050     # Hz — I2S hardware-clocked, reliable
+PACKET_FRAMES = 1024      # samples per send (~46 ms at 22050 Hz)
 RECONNECT_DELAY = 3       # seconds to wait before retrying connection
-GAIN = 2                  # Pico-side gain (adjust based on mic solder quality)
+
+# I2S pins (WS must be SCK + 1 on Pico)
+I2S_SCK = 16
+I2S_WS  = 17
+I2S_SD  = 18
 
 # ── LED for status ─────────────────────────────────────────
 led = Pin("LED", Pin.OUT)
@@ -245,49 +279,31 @@ def tcp_connect():
 
 # ── Main ───────────────────────────────────────────────────
 wlan = connect_wifi()
-mic = ADC(Pin(26))   # GP26 = ADC0
-interval_us = 1_000_000 // SAMPLE_RATE
 
-# Calibrate DC offset in silence (0.5s)
-print("Calibrating mic offset...", end="")
-total = 0
-for _ in range(500):
-    total += mic.read_u16()
-    time.sleep_us(1000)
-midpoint = total // 500
-print(f" midpoint={midpoint}")
+audio_in = I2S(
+    0,
+    sck=Pin(I2S_SCK),
+    ws=Pin(I2S_WS),
+    sd=Pin(I2S_SD),
+    mode=I2S.RX,
+    bits=16,
+    format=I2S.MONO,
+    rate=SAMPLE_RATE,
+    ibuf=20000,
+)
 
-print(f"Streaming to {SERVER_IP}:{SERVER_PORT} at {SAMPLE_RATE} Hz, gain={GAIN}x")
+print(f"I2S mic ready: INMP441 at {SAMPLE_RATE} Hz")
+print(f"Streaming to {SERVER_IP}:{SERVER_PORT}")
 
 while True:
     sock = tcp_connect()
     buf = bytearray(PACKET_FRAMES * 2)
-    idx = 0
-    t_next = time.ticks_us()
 
     try:
         while True:
-            t_next = time.ticks_add(t_next, interval_us)
-            while time.ticks_diff(t_next, time.ticks_us()) > 0:
-                pass
-
-            raw = mic.read_u16()
-
-            sample = (raw - midpoint) * GAIN
-
-            if sample > 32767:
-                sample = 32767
-            elif sample < -32768:
-                sample = -32768
-
-            buf[idx]     = sample & 0xFF
-            buf[idx + 1] = (sample >> 8) & 0xFF
-            idx += 2
-
-            if idx >= len(buf):
-                sock.send(buf)
-                idx = 0
-                time.sleep_ms(1)  # yield to WiFi stack
+            num_read = audio_in.readinto(buf)
+            if num_read > 0:
+                sock.send(buf[:num_read])
     except OSError as e:
         print(f"Connection lost ({e}), reconnecting...")
         try:
@@ -296,48 +312,37 @@ while True:
             pass
 ```
 
-> **⚠ Warning:** Replace `YOUR_WIFI_SSID`, `YOUR_WIFI_PASSWORD`, and `192.168.1.XXX` with your actual network credentials and Pi 4B IP before uploading. Find the Pi's IP with `hostname -I` on the Pi.
+> **Warning:** Replace `YOUR_WIFI_SSID`, `YOUR_WIFI_PASSWORD`, and `192.168.1.XXX` with your actual network credentials and Pi 4B IP before uploading. Find the Pi's IP with `hostname -I` on the Pi.
 
-> **⚠ Warning:** The Pico 2W only supports **2.4 GHz WiFi**. It cannot connect to 5 GHz networks. If your router broadcasts both, use the 2.4 GHz SSID (often named `YourNetwork_2G` or similar).
+> **Warning:** The Pico 2W only supports **2.4 GHz WiFi**. It cannot connect to 5 GHz networks.
 
 To **test**, click the green Run button in Thonny. To **deploy**, save to the Pico permanently: **File → Save as → Raspberry Pi Pico → `main.py`**. The Pico will then auto-stream on every power-up — no computer needed.
 
-### Why 16000 Hz?
+### Why 22050 Hz?
 
-BirdNET internally operates at 48 kHz, but the bridge on the Pi handles resampling. We use **16000 Hz** on the Pico because MicroPython's bytecode interpreter + WiFi overhead limits the achievable ADC sample rate.
+With I2S, sample rate is no longer limited by MicroPython's CPU speed — the PIO hardware handles clocking. We chose **22050 Hz** because:
 
-**Field-tested measurement:** at a target of 22050 Hz, the Pico 2W with 2× oversampling and active WiFi only achieves **~17000 Hz actual throughput**. The mismatch causes pitch distortion (voices sound like cartoon characters). Setting the target to 16000 Hz gives headroom for consistent, accurate timing.
+| Rate         | Captures up to | Bandwidth      | Bird coverage                                |
+| ------------ | -------------- | -------------- | -------------------------------------------- |
+| 16000 Hz     | ~8 kHz         | ~31 KB/s       | Most birds (1–8 kHz)                         |
+| **22050 Hz** | **~11 kHz**    | **~43 KB/s**   | **Nearly all birds including high trills**   |
+| 44100 Hz     | ~22 kHz        | ~86 KB/s       | Overkill — doubles bandwidth for no gain     |
 
-| Rate         | Captures up to | MicroPython feasibility                    | Bird coverage                                |
-| ------------ | -------------- | ------------------------------------------ | -------------------------------------------- |
-| **16000 Hz** | **~8 kHz**     | **Tested — reliable with WiFi active**     | **Covers most bird vocalizations (1–8 kHz)** |
-| 22050 Hz     | ~11 kHz        | Too fast — actual rate drops to ~17 kHz    | N/A without C firmware                       |
-| 48000 Hz     | ~24 kHz        | Far too fast for MicroPython               | N/A                                          |
+### Why I2S instead of ADC?
 
-### Why single ADC read with WiFi yield?
+The previous version used an analog mic (SPH8878LR5H-1) with the Pico's 12-bit ADC. This had several issues:
+- ADC sampling was software-timed, capping at 16 kHz with WiFi active
+- WiFi switching noise corrupted the analog signal (required decoupling caps)
+- DC offset calibration needed at every boot
+- Manual gain stage on both Pico and bridge sides
 
-Earlier versions used median-of-3 ADC reads to reject WiFi noise spikes. However, field testing showed that 3 reads per sample consume too much CPU, starving the WiFi stack and causing periodic TCP disconnects (every 1–3 minutes). A single ADC read with a **1ms yield** (`time.sleep_ms(1)`) after each packet send gives the WiFi stack enough time to maintain the connection, achieving **10+ hours** of continuous streaming.
-
-### Why Pico-side gain?
-
-The mic produces only ~200 mV peak-to-peak in a 3.3V ADC range — about 9% of full scale. Without gain, BirdNET sees only noise. With properly soldered mic connections, `GAIN = 2` on the Pico plus `volume=2` in ffmpeg (4× total) produces peaks near -1 dB — close to full scale. Adjust `GAIN` based on your mic's solder quality:
-
-| GAIN | Total (with volume=2) | Use when... |
-|------|----------------------|-------------|
-| 1    | 2× | Signal clips (peak > 0 dB) |
-| **2** | **4×** | **Default — properly soldered mic** |
-| 4    | 8× | Signal is too quiet |
-| 8    | 16× | Very weak signal or distant sound source |
+With I2S, the Pico's PIO peripheral handles all timing in hardware. The `audio_in.readinto(buf)` call blocks until the buffer is full — no busy-wait loop, no timing jitter, no CPU starvation of the WiFi stack.
 
 ---
 
 ## 6. Bridge service (TCP → WAV files)
 
-The bridge listens for a TCP connection from the Pico 2W, pipes the audio through `ffmpeg` for filtering and resampling, and writes **15-second WAV files** directly to BirdNET-Pi's `StreamData` folder. No ALSA loopback, no arecord, no device conflicts.
-
-### Why direct WAV instead of ALSA loopback?
-
-The original design used `snd-aloop` (ALSA loopback) to bridge audio into BirdNET-Pi's recording pipeline. Field testing revealed that ffmpeg's ALSA output locks the loopback cable, preventing BirdNET-Pi's `arecord` from opening the capture side. This caused `Device or resource busy` errors that were difficult to resolve reliably. Writing WAV files directly bypasses ALSA entirely and is simpler, more reliable, and produces identical results.
+The bridge listens for a TCP connection from the Pico 2W, pipes the audio through `ffmpeg` for filtering and resampling, and writes **15-second WAV files** directly to BirdNET-Pi's `StreamData` folder.
 
 ### `birdnet_mic_bridge.py` (on Pi 4B)
 
@@ -349,7 +354,7 @@ LISTEN_IP    = "0.0.0.0"
 LISTEN_PORT  = 5005
 BUFFER_SIZE  = 4096
 
-INPUT_RATE   = 16000
+INPUT_RATE   = 22050
 OUTPUT_RATE  = 48000
 CHANNELS     = 1
 SEGMENT_SEC  = 15
@@ -375,7 +380,7 @@ def start_ffmpeg():
             "-ar", str(INPUT_RATE),
             "-ac", str(CHANNELS),
             "-i", "pipe:0",
-            "-af", "highpass=f=500:poles=2,highpass=f=500:poles=2,lowpass=f=7500,volume=2",
+            "-af", "highpass=f=200:poles=2,lowpass=f=10000",
             "-ar", str(OUTPUT_RATE),
             "-ac", str(CHANNELS),
             "-f", "segment",
@@ -397,8 +402,7 @@ def main():
 
     print(f"[bridge] Listening on :{LISTEN_PORT}")
     print(f"[bridge] Writing {SEGMENT_SEC}s WAV files to {RECS_DIR}")
-    print(f"[bridge] Filters: 2x HP 500Hz, LP 7500Hz, volume 2x")
-    print(f"[bridge] No ALSA loopback needed for recording!")
+    print(f"[bridge] Filters: HP 200Hz, LP 10kHz (I2S — no volume boost needed)")
 
     while running:
         print("[bridge] Waiting for Pico 2W connection...", flush=True)
@@ -436,23 +440,38 @@ if __name__ == "__main__":
 
 ### Why the ffmpeg filter chain?
 
-- **`highpass=f=500:poles=2` (×2)** — Two stacked high-pass filters at 500 Hz (4th-order rolloff). Removes WiFi noise concentrated below 500 Hz. Bird vocalizations start above 1 kHz so nothing useful is lost.
-- **`lowpass=f=7500`** — Removes high-frequency ADC/digital noise above 7.5 kHz.
-- **`volume=2`** — 2× gain on the bridge side (combined with 2× on the Pico = 4× total).
-- **`-f segment -segment_time 15`** — Splits audio into 15-second WAV files with timestamped names, matching BirdNET-Pi's expected format.
+- **`highpass=f=200:poles=2`** — Removes wind noise and handling rumble below 200 Hz. Bird vocalizations start above 1 kHz so nothing useful is lost. (Lighter than before — I2S has no low-frequency ADC noise to fight.)
+- **`lowpass=f=10000`** — Removes ultrasonic artifacts above 10 kHz. With 22050 Hz sample rate, Nyquist is 11025 Hz.
+- **No volume boost** — The INMP441 outputs full-scale digital audio at -26 dBFS sensitivity. No gain stage needed.
+- **`-f segment -segment_time 15`** — Splits audio into 15-second WAV files with timestamped names.
 
 ### Install as a systemd service
 
-Place the bridge script:
+**Automated (recommended):** Use the install script — it detects your user, sets up paths, and masks conflicting services:
+
+```bash
+cd bridge/
+sudo bash install.sh
+```
+
+The script auto-detects your username and StreamData path. Override with flags if needed:
+
+```bash
+sudo bash install.sh --user pi --recs-dir /home/pi/BirdSongs/StreamData
+```
+
+To uninstall (stops service, removes files, unmasks recording service):
+
+```bash
+sudo bash install.sh --uninstall
+```
+
+**Manual alternative:** If you prefer to install step by step:
 
 ```bash
 sudo mkdir -p /opt/mic_bridge
 sudo cp birdnet_mic_bridge.py /opt/mic_bridge/birdnet_mic_bridge.py
-```
 
-Create the service file:
-
-```bash
 sudo tee /etc/systemd/system/birdnet-mic-bridge.service << 'EOF'
 [Unit]
 Description=Pico 2W wireless mic bridge for BirdNET-Pi
@@ -462,68 +481,49 @@ Before=birdnet_analysis.service
 
 [Service]
 Type=simple
-User=pr13s7
+User=YOUR_USER
 ExecStart=/usr/bin/python3 /opt/mic_bridge/birdnet_mic_bridge.py
-Environment=RECS_DIR=/home/pr13s7/BirdSongs/StreamData
+Environment=RECS_DIR=/home/YOUR_USER/BirdSongs/StreamData
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
-```
 
-Enable and start:
-
-```bash
 sudo systemctl daemon-reload
-sudo systemctl enable birdnet-mic-bridge.service
-sudo systemctl start birdnet-mic-bridge.service
-
-# Check status
-sudo systemctl status birdnet-mic-bridge.service
+sudo systemctl enable --now birdnet-mic-bridge.service
+sudo systemctl stop birdnet_recording.service
+sudo systemctl mask birdnet_recording.service
 ```
-
-> **✦ Tip:** The bridge writes WAV files directly — no ALSA loopback or recording service needed. **Mask** `birdnet_recording.service` to prevent conflicts (disable alone is not enough — BirdNET's watchdog re-enables it):
->
-> ```bash
-> sudo systemctl stop birdnet_recording.service
-> sudo systemctl mask birdnet_recording.service
-> ```
 
 ---
 
 ## 7. BirdNET-Pi configuration
 
-Since the bridge writes WAV files directly to StreamData, BirdNET-Pi's **analysis service** picks them up automatically. You only need to adjust the confidence threshold.
+Since the bridge writes WAV files directly to StreamData, BirdNET-Pi's **analysis service** picks them up automatically.
 
-### Lower the confidence threshold
+### Confidence threshold
 
-The analog mic through the Pico's ADC produces lower-quality audio than a USB mic. Lower the confidence threshold from the default 0.7 to 0.5:
+With the INMP441's clean digital output, the default threshold should work well. If you want to catch more distant birds, lower it:
 
 ```bash
 sudo nano /etc/birdnet/birdnet.conf
 
-# Change this line:
-CONFIDENCE=0.5
+# Optional — default 0.7 is fine with I2S mic
+CONFIDENCE=0.6
 ```
 
-Then restart the analysis service:
-
-```bash
-sudo systemctl restart birdnet_analysis.service
-```
+Then restart: `sudo systemctl restart birdnet_analysis.service`
 
 ### Mask the recording service
-
-The bridge replaces the recording service. You must **mask** it — a simple `disable` is not enough because BirdNET-Pi's watchdog re-enables it:
 
 ```bash
 sudo systemctl stop birdnet_recording.service
 sudo systemctl mask birdnet_recording.service
 ```
 
-> **✦ Tip:** To undo later: `sudo systemctl unmask birdnet_recording.service`
+> **Tip:** To undo later: `sudo systemctl unmask birdnet_recording.service`
 
 ---
 
@@ -540,7 +540,7 @@ sudo systemctl mask birdnet_recording.service
  │  3. Power on Pico 2W        ← connects and streams     │
  │                                                         │
  │  Audio flows:                                           │
- │  Pico → TCP → bridge → ffmpeg → 15s WAV files          │
+ │  Pico I2S → TCP → bridge → ffmpeg → 15s WAV files      │
  │                              → birdnet_analysis          │
  └─────────────────────────────────────────────────────────┘
 ```
@@ -552,16 +552,13 @@ sudo systemctl status birdnet-mic-bridge.service
 sudo systemctl status birdnet_analysis.service
 ```
 
-Both should show `active (running)`.
-
 ### Step 2 — Power on the Pico 2W
 
 The LED will blink while connecting to WiFi, then go solid. Within seconds, WAV files start appearing in `~/BirdSongs/StreamData/`.
 
 ### Step 3 — Verify detections
 
-Open the BirdNET-Pi web UI at `http://birdnetpi.local`. You should see:
-- Bird detections appearing in the log as birds vocalize
+Open the BirdNET-Pi web UI at `http://birdnetpi.local`.
 
 ### Quick debug commands
 
@@ -575,9 +572,6 @@ ss -tn sport = :5005
 
 # Is the bridge running and forwarding?
 journalctl -u birdnet-mic-bridge -f
-
-# Is BirdNET analyzing?
-journalctl -u birdnet_analysis -f
 
 # Are WAV files being created?
 ls -lt ~/BirdSongs/StreamData/*.wav | head -5
@@ -593,12 +587,7 @@ rms = math.sqrt(sum(s*s for s in samples)/len(samples))
 print(f'Peak: {peak} ({peak/32768*100:.1f}%)  RMS: {rms:.0f}')
 print('SILENT — check bridge and Pico' if peak < 100 else 'HAS AUDIO')
 "
-
-# Check latest detection results
-cat ~/BirdSongs/StreamData/*.json
 ```
-
-> **⚠ Warning:** If the Pico loses WiFi, the TCP connection drops. The bridge detects this and waits for a new connection. The Pico's reconnect loop retries every 3 seconds until the bridge is reachable again.
 
 ---
 
@@ -606,153 +595,58 @@ cat ~/BirdSongs/StreamData/*.json
 
 ### Common issues
 
-| Symptom                                        | Cause                                                           | Fix                                                                                         |
-| ---------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| No detections in BirdNET-Pi                    | Bridge not writing WAV files or analysis not running            | Check `ls -lt ~/BirdSongs/StreamData/*.wav` and `systemctl status birdnet_analysis`         |
-| BirdNET always reports same species at 0.015   | WAV files are silent — bridge not receiving data                | Check Pico is connected: `ss -tn sport = :5005`                                             |
-| Voice sounds like cartoon character            | Sample rate mismatch — Pico samples slower than configured rate | Use `SAMPLE_RATE = 16000` on Pico (MicroPython can't sustain 22050 Hz with WiFi)            |
-| `ModuleNotFoundError: network`                 | Wrong MicroPython firmware (non-W) or Thonny using local Python | Flash `RPI_PICO2_W` firmware; set Thonny interpreter to "MicroPython (Raspberry Pi Pico)"   |
-| Pico WiFi connects manually but not in script  | Stale WiFi state after soft reboot                              | The `wlan.disconnect()` + `time.sleep(1)` in the script handles this                       |
-| Pico LED blinks fast forever                   | WiFi credentials wrong or 5 GHz network                         | Pico 2W only supports 2.4 GHz; check SSID/password                                          |
-| Audio sounds choppy                            | WiFi interference or TCP backpressure                           | Move Pico closer to router, check for WiFi congestion                                       |
-| Pico LED turns off every few minutes           | TCP disconnect — WiFi stack starved of CPU                      | Ensure `time.sleep_ms(1)` after each `sock.send()` in the sampling loop                     |
-| `arecord: Device or resource busy`             | `birdnet_recording.service` conflicts with bridge               | `sudo systemctl mask birdnet_recording.service` (disable alone is not enough)                |
-| ADC reads stuck at ~63000                      | Mic wiring issue or ADC pin damaged by overvoltage              | Check wiring; test with `ADC(Pin(27))` to rule out pin damage                                |
-
-### Field-tested lessons learned
-
-1. **MicroPython can't sustain 22050 Hz with WiFi active.** Measured throughput is ~17000 Hz. Use `SAMPLE_RATE = 16000` for consistent timing.
-
-2. **WiFi `disconnect()` before `connect()` is essential.** After a MicroPython soft reboot, the WiFi radio can be in a stale state.
-
-3. **The analog mic signal needs amplification.** The SPH8878LR5H-1 produces ~200 mV peak-to-peak at arm's length — only ~9% of the ADC's full scale. With a properly soldered mic, `GAIN=2` on Pico + `volume=2` in ffmpeg (4× total) is sufficient.
-
-4. **ALSA loopback causes device locking issues.** ffmpeg's ALSA output locks the loopback cable, preventing arecord from opening the capture side. Writing WAV files directly to StreamData bypasses this entirely.
-
-5. **Mask `birdnet_recording.service`, don't just disable it.** BirdNET-Pi's watchdog re-enables the recording service after a simple `disable`. Use `sudo systemctl mask birdnet_recording.service` to prevent it from starting by any means.
-
-6. **Single ADC read + WiFi yield is more stable than median-of-3.** Median-of-3 uses too much CPU and starves the WiFi stack, causing disconnects every 1–3 minutes. A single read with `time.sleep_ms(1)` after each packet achieves 10+ hours of continuous streaming.
-
-7. **DC offset calibration matters.** The ADC midpoint varies per board (~32505 vs theoretical 32768). Calibrating at startup prevents amplified DC drift.
-
-8. **Solder quality dramatically affects signal.** A poorly soldered mic connection adds 20+ dB of noise. Re-soldering improved SNR from 5 dB to 24 dB in field testing.
-
-9. **Never power the mic from an external source above 3.3V without a voltage divider.** The mic's op-amp output can reach VCC, and voltages above 3.3V will damage the Pico's ADC pins.
+| Symptom                                        | Cause                                                    | Fix                                                                                       |
+| ---------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| No detections in BirdNET-Pi                    | Bridge not writing WAV files or analysis not running     | Check `ls -lt ~/BirdSongs/StreamData/*.wav` and `systemctl status birdnet_analysis`       |
+| WAV files are silent (peak < 100)              | I2S wiring wrong or mic not powered                      | Check VDD is 3.3V, SCK/WS/SD connected, L/R tied to GND                                  |
+| `ValueError: invalid I2S pin`                  | WS pin not SCK+1                                         | Use GP16 (SCK) + GP17 (WS) — WS must always be SCK + 1                                   |
+| `ModuleNotFoundError: network`                 | Wrong MicroPython firmware (non-W)                       | Flash `RPI_PICO2_W` firmware                                                              |
+| Pico LED blinks fast forever                   | WiFi credentials wrong or 5 GHz network                  | Pico 2W only supports 2.4 GHz; check SSID/password                                       |
+| Audio sounds choppy                            | WiFi interference or TCP backpressure                    | Move Pico closer to router; check WiFi congestion                                         |
+| All samples are zero                           | L/R pin floating (not connected)                         | Tie L/R to GND (left channel) or 3V3 (right channel)                                     |
+| Audio is half the expected volume              | L/R on wrong channel                                     | Ensure `format=I2S.MONO` and L/R matches (GND = left)                                    |
+| `arecord: Device or resource busy`             | `birdnet_recording.service` conflicts with bridge        | `sudo systemctl mask birdnet_recording.service`                                           |
 
 ### Tuning the ffmpeg filter chain
 
-The bridge uses: `highpass=f=500:poles=2,highpass=f=500:poles=2,lowpass=f=7500,volume=2`
+The bridge uses: `highpass=f=200:poles=2,lowpass=f=10000`
 
-| Parameter     | Default  | Increase if...                         | Decrease if...                         |
-| ------------- | -------- | -------------------------------------- | -------------------------------------- |
-| `highpass=f=` | 500 Hz   | Low-frequency noise is audible         | Low-frequency bird calls are being cut |
-| `lowpass=f=`  | 7500 Hz  | High-pitched noise is present          | You want to capture higher frequencies |
-| `volume=`     | 2        | BirdNET confidence is consistently low | Audio is clipping (distorted at peak)  |
-| Pico `GAIN`   | 2        | Signal is too quiet                    | Signal clips at 32767                  |
+| Parameter     | Default   | Increase if...                         | Decrease if...                          |
+| ------------- | --------- | -------------------------------------- | --------------------------------------- |
+| `highpass=f=` | 200 Hz    | Wind noise is dominant                 | Low-frequency bird calls being cut      |
+| `lowpass=f=`  | 10000 Hz  | High-pitched noise artifacts           | You hear ultrasonic artifacts (unlikely)|
 
 After editing bridge filters, restart: `sudo systemctl restart birdnet-mic-bridge.service`
 
-### Hardware noise reduction (optional but recommended)
-
-The Pico 2W's WiFi chip puts switching noise on the 3.3V power rail. This noise travels through the VCC wire to the mic's op-amp, corrupting the analog signal. Two capacitors between **VCC and GND** at the mic end filter this conducted noise:
-
-- **100nF ceramic capacitor** — filters high-frequency noise (MHz range, WiFi switching)
-- **10µF electrolytic capacitor** — filters low-frequency noise (kHz range, power supply ripple)
-
-```
-        Pico 2W                          Mic Breakout
-      ┌──────────┐                      ┌──────────────┐
-      │          │                      │              │
-      │  3V3 ────│── Red wire ──────┬───│── VCC        │
-      │          │                  │   │              │
-      │          │             ┌────┤   │              │
-      │          │             │  ┌─┤   │              │
-      │          │           100nF │ │   │              │
-      │          │          (ceramic) │   │              │
-      │          │             │  │10µF │              │
-      │          │             │  │(+)  │              │
-      │          │             │  │(electrolytic)      │
-      │          │             └────┤   │              │
-      │          │                  │   │              │
-      │  GND ────│── Black wire ────┴───│── GND        │
-      │          │                      │              │
-      │  GP26 ───│── Yellow wire ───────│── AUD        │
-      └──────────┘                      └──────────────┘
-```
-
-**Placement rules:**
-
-- Both capacitors go **in parallel** between VCC and GND
-- Place them **as close to the mic breakout as possible** (not near the Pico)
-- **100nF ceramic** — no polarity, either leg in either hole
-- **10µF electrolytic** — **POLARIZED!** Longer leg (+) → VCC, shorter leg with stripe (−) → GND. Reversing it damages the cap.
-- On a breadboard: both caps share the same two rows (one row = VCC, other row = GND)
-
-> **⚠ Warning:** The electrolytic capacitor is polarized. The **longer leg** (or the leg **without** the stripe on the body) connects to **VCC (3.3V)**. The **shorter leg** (stripe side) connects to **GND**. Reversing polarity can cause the capacitor to overheat or burst.
-
 ### Weatherproof outdoor deployment
 
-For a wireless outdoor bird monitoring station:
-
-- Power the Pico 2W from a small USB power bank (the mic draws ~265 µA, the Pico uses ~40–80 mA over WiFi — a 1000 mAh bank gives **10+ hours**)
+- Power the Pico 2W from a small USB power bank (~40–80 mA over WiFi — a 1000 mAh bank gives **10+ hours**)
 - Use a waterproof enclosure with a small hole for the mic's sound port
 - Point the mic hole downward to prevent rain ingress
-- Place it near known bird activity (feeders, nest boxes, water features)
+- Place near known bird activity (feeders, nest boxes, water features)
 
 ---
 
-## Appendix: Design decisions from open-source research
+## Appendix: Why INMP441?
 
-This guide's design was informed by analyzing 6 open-source wireless microphone projects. Here's what we learned and why we made the choices we did:
+Three I2S MEMS microphones were evaluated for this project:
 
-```
- ┌──────────────────────────────────────────────────────────────────────────┐
- │              DESIGN DECISIONS — WHAT WE TOOK FROM EACH PROJECT          │
- ├──────────────────────────────────────────────────────────────────────────┤
- │                                                                         │
- │  BirdEdge-Mic (umr-ds)                                                  │
- │  └─ HTTP chunked WAV stream, 44.1 kHz, mDNS discovery                  │
- │     ✗ Too heavy for MicroPython (async web server)                      │
- │     ✓ Confirmed: no bird-specific DSP needed in firmware                │
- │     ✓ Insight: single-client streaming is fine for our use case         │
- │                                                                         │
- │  esp32_wireless_microphone (atomic14)                                   │
- │  └─ TCP sockets + WebSocket, 44.1 kHz, Python receiver                 │
- │     ✓ ADOPTED: TCP as primary transport (reliable delivery)             │
- │     ✓ ADOPTED: WiFi.setSleep(NONE) → wlan.config(pm=...) on Pico       │
- │     ✓ Validated: Python receiver pattern matches our bridge design      │
- │                                                                         │
- │  esp32-walkie-talkie (atomic14)                                         │
- │  └─ UDP broadcast, 16 kHz, 8-bit unsigned PCM, 1436-byte packets       │
- │     ✓ ADOPTED: WiFi power-save disable for packet timing               │
- │     ✓ Insight: 1436 bytes/packet near MTU — we use 1024 (safer)        │
- │                                                                         │
- │  ESP32_PRJ (vernonet)                                                   │
- │  └─ WiFi mic @ 22050 Hz, WAV + AAC variants, ring buffer               │
- │     ✓ Insight: AAC (FDK) needs PSRAM — not feasible on Pico 2W         │
- │     ✓ Insight: ring buffer + backpressure pattern for reliability       │
- │                                                                         │
- │  Micro-RTSP-Audio (pschatzmann)                                         │
- │  └─ RTSP + RTP/UDP, L16 PCM, 16 kHz, RP2040 socket glue               │
- │     ✗ ESP32 timer dependency — not portable to MicroPython              │
- │     ✓ Insight: RTP fragment_size=640 bytes works at 16 kHz              │
- │                                                                         │
- │  arduino-liblc3 (pschatzmann)                                           │
- │  └─ LC3 codec, 16-320 kbps, float-based, 4-16× compression            │
- │     ✗ Requires C native module — too complex for this guide             │
- │     ✓ Insight: RP2350 FPU makes LC3 feasible as future optimization    │
- │                                                                         │
- └──────────────────────────────────────────────────────────────────────────┘
-```
+| Feature              | INMP441                     | SPH0645LM4H                       | ICS-43434                       |
+| -------------------- | --------------------------- | ---------------------------------- | ------------------------------- |
+| I2S timing           | Standard Philips I2S        | **Non-standard** (1-bit shift)     | Standard                        |
+| MicroPython support  | Tested & documented         | Requires `I2S.shift()` workaround  | Not tested in community         |
+| SNR                  | 61 dB(A)                    | 65 dB(A)                           | 65 dB(A)                        |
+| Price                | ~$2-5                       | ~$7 (Adafruit)                     | ~$8-12                          |
+| Availability         | Widely available            | Adafruit only                      | Limited breakout boards         |
+| Community examples   | Many (miketeachman/i2s)     | Few (with workaround notes)        | Very few                        |
 
-### Why we chose TCP + raw 16-bit PCM as the default
+**INMP441 wins** because:
+1. **Standard I2S timing** — works directly with MicroPython's `machine.I2S` class, no bit-shift workarounds
+2. **Extensively tested** — the [micropython-i2s-examples](https://github.com/miketeachman/micropython-i2s-examples) repo uses INMP441 as the primary test mic
+3. **Cheap and available** — $2-5 on AliExpress/Amazon/eBay with fast shipping
+4. **61 dB SNR is sufficient** — the 4 dB gap vs SPH0645/ICS-43434 is negligible for outdoor bird monitoring where ambient noise dominates
 
-| Alternative                       | Pros                                                       | Cons for Pico 2W                                                            |
-| --------------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------------------- |
-| **HTTP WAV stream** (BirdEdge)    | Standard, works with any player                            | Needs async web server; MicroPython can't serve reliably at 16 kHz          |
-| **UDP stream**                    | Simplest code, no connection state                         | Packet loss causes audio glitches; no flow control; no disconnect detection |
-| **RTSP/RTP** (Micro-RTSP)         | Industry standard, works with VLC                          | Complex protocol; ESP32 timer dependency; overkill for point-to-point       |
-| **TCP + 16-bit PCM** (our choice) | Reliable delivery, clean disconnection, full dynamic range | ~250 kbit/s bandwidth — acceptable on any WiFi                              |
+The SPH0645's non-standard timing (documented at [StreetSense project](https://hackaday.io/project/162059-street-sense/log/160705-new-i2s-microphone)) means audio samples arrive shifted left by one bit, causing a 6 dB level increase that requires software correction on every read.
 
 ---
 
@@ -763,12 +657,12 @@ This guide's design was informed by analyzing 6 open-source wireless microphone 
 │                        STREAM FORMAT                                │
 ├─────────────────────────────────────────────────────────────────────┤
 │  Transport: TCP (port 5005)                                         │
-│  512 × int16 samples (little-endian)  =  1024 bytes per send       │
-│  Pico sample rate: 16000 Hz  →  ~32 ms of audio per send           │
-│  Sends per second: ~31                                              │
-│  Bandwidth: ~31 KB/s  (~250 kbit/s)                                 │
-│  Pico gain: 2x  +  ffmpeg gain: 2x  =  4x total                    │
-│  ffmpeg filters: 2x HP 500Hz, LP 7500Hz                             │
+│  1024 × int16 samples (little-endian)  =  2048 bytes per send      │
+│  Pico sample rate: 22050 Hz (I2S hardware-clocked)                  │
+│  Sends per second: ~21                                              │
+│  Bandwidth: ~43 KB/s  (~345 kbit/s)                                 │
+│  No gain needed — I2S provides full-scale digital audio             │
+│  ffmpeg filters: HP 200Hz, LP 10kHz                                 │
 │  Resampled on Pi to: 48000 Hz (required by BirdNET)                │
 │  Output: 15-second WAV files to StreamData/                         │
 └─────────────────────────────────────────────────────────────────────┘
@@ -776,17 +670,12 @@ This guide's design was informed by analyzing 6 open-source wireless microphone 
 ┌─────────────────────────────────────────────────────────────────────┐
 │                        PIN QUICK REF                                │
 ├─────────────────────────────────────────────────────────────────────┤
-│  Mic VCC  →  Pico Pin 36 (3V3)                                     │
-│  Mic GND  →  Pico Pin 38 (GND)                                     │
-│  Mic AUD  →  Pico Pin 31 (GP26 / ADC0)                             │
-│  Optional: 100nF + 10µF caps between VCC and GND (noise reduction) │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│                     BIRDNET.CONF SETTINGS                            │
-├─────────────────────────────────────────────────────────────────────┤
-│  CONFIDENCE=0.5  (lower than default 0.7 for analog mic)            │
-│  birdnet_recording.service: MASKED (bridge writes WAV directly)     │
+│  INMP441 VDD  →  Pico Pin 36 (3V3)                                 │
+│  INMP441 GND  →  Pico Pin 23 (GND)                                 │
+│  INMP441 SCK  →  Pico Pin 21 (GP16)                                │
+│  INMP441 WS   →  Pico Pin 22 (GP17)   ← must be SCK + 1           │
+│  INMP441 SD   →  Pico Pin 24 (GP18)                                │
+│  INMP441 L/R  →  Pico Pin 23 (GND)    ← left channel              │
 └─────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────┐
@@ -795,14 +684,5 @@ This guide's design was informed by analyzing 6 open-source wireless microphone 
 │  Bridge:    sudo systemctl {start|stop|status} birdnet-mic-bridge   │
 │  Analysis:  sudo systemctl {start|stop|status} birdnet_analysis     │
 │  Logs:      journalctl -u birdnet-mic-bridge -f                     │
-│              journalctl -u birdnet_analysis -f                       │
-└─────────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────────┐
-│                     FILE LOCATIONS                                    │
-├─────────────────────────────────────────────────────────────────────┤
-│  Bridge script:   /opt/mic_bridge/birdnet_mic_bridge.py              │
-│  BirdNET config:  /etc/birdnet/birdnet.conf                          │
-│  Stream data:     ~/BirdSongs/StreamData/                            │
 └─────────────────────────────────────────────────────────────────────┘
 ```

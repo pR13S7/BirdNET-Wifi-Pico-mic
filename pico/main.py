@@ -1,7 +1,7 @@
 import time
 import socket
 import network
-from machine import ADC, Pin
+from machine import I2S, Pin
 
 try:
     from lcd import LCD, BLACK, WHITE, RED, GREEN, YELLOW, GRAY, ORANGE, CYAN, BLUE
@@ -10,16 +10,20 @@ try:
 except Exception:
     HAS_LCD = False
 
-WIFI_SSID = "cave"
-WIFI_PASSWORD = "deadbeef00"
+WIFI_SSID = "YOUR_WIFI_SSID"
+WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 
-SERVER_IP = "192.168.0.50"
+SERVER_IP = "192.168.1.XXX"
 SERVER_PORT = 5005
 
-SAMPLE_RATE = 16000
-PACKET_FRAMES = 512
+SAMPLE_RATE = 22050
+PACKET_FRAMES = 1024
 RECONNECT_DELAY = 3
-GAIN = 4
+
+# I2S pins (WS must be SCK + 1 on Pico)
+I2S_SCK = 16
+I2S_WS = 17
+I2S_SD = 18
 
 led = Pin("LED", Pin.OUT)
 
@@ -68,7 +72,7 @@ def fmt_uptime(sec):
     return f"{h}h {m:02d}m {s:02d}s"
 
 
-def draw_info(wifi_ip, bridge, uptime_s, sent_mb, midpoint, msg):
+def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
     lcd.clear()
     lcd.text("BirdNET Mic", 4, 4, GREEN)
     lcd.hline(4, 16, 232, GRAY)
@@ -91,11 +95,10 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, midpoint, msg):
 
     lcd.text(f"Up:   {fmt_uptime(uptime_s)}", 4, 92, WHITE)
     lcd.text(f"Sent: {sent_mb:.1f} MB", 4, 104, WHITE)
-    lcd.text(f"Mid:  {midpoint}", 4, 116, GRAY)
-    lcd.text(f"Rate: {SAMPLE_RATE} Hz", 4, 132, GRAY)
-    lcd.text(f"Gain: {GAIN}x", 4, 144, GRAY)
+    lcd.text(f"Rate: {SAMPLE_RATE} Hz", 4, 120, GRAY)
+    lcd.text("Mic:  INMP441 I2S", 4, 132, GRAY)
 
-    lcd.text(f"Peak: {pkt_peak}", 4, 164, CYAN)
+    lcd.text(f"Peak: {pkt_peak}", 4, 152, CYAN)
 
     if msg:
         lcd.hline(4, 220, 232, GRAY)
@@ -171,11 +174,11 @@ def draw_waveform():
     lcd.show()
 
 
-def update_display(wifi_ip, bridge, uptime_s, sent_mb, midpoint, msg=None):
+def update_display(wifi_ip, bridge, uptime_s, sent_mb, msg=None):
     if not HAS_LCD:
         return
     if current_screen == SCREEN_INFO:
-        draw_info(wifi_ip, bridge, uptime_s, sent_mb, midpoint, msg)
+        draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg)
     elif current_screen == SCREEN_VU:
         draw_vu()
     elif current_screen == SCREEN_WAVE:
@@ -204,7 +207,7 @@ def check_joystick():
 
 def connect_wifi():
     if HAS_LCD:
-        draw_info(None, False, 0, 0, 0, "Booting...")
+        draw_info(None, False, 0, 0, "Booting...")
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     wlan.disconnect()
@@ -227,7 +230,7 @@ def connect_wifi():
     if not wlan.isconnected():
         print("\nWiFi FAILED — blinking LED")
         if HAS_LCD:
-            draw_info(None, False, 0, 0, 0, "WiFi FAILED!")
+            draw_info(None, False, 0, 0, "WiFi FAILED!")
         while True:
             led.toggle()
             time.sleep(0.1)
@@ -237,7 +240,7 @@ def connect_wifi():
     led.on()
     wlan.config(pm=0xa11140)
     if HAS_LCD:
-        draw_info(ip, False, 0, 0, 0, "WiFi OK")
+        draw_info(ip, False, 0, 0, "WiFi OK")
     return wlan, ip
 
 # ── TCP connect with retry ────────────────────────────────
@@ -245,7 +248,7 @@ def connect_wifi():
 
 def tcp_connect(wifi_ip):
     if HAS_LCD:
-        draw_info(wifi_ip, False, 0, 0, 0, "Connecting TCP...")
+        draw_info(wifi_ip, False, 0, 0, "Connecting TCP...")
     while True:
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -270,91 +273,82 @@ def run():
 
     wlan, wifi_ip = connect_wifi()
 
-    mic = ADC(Pin(26))
-    interval_us = 1_000_000 // SAMPLE_RATE
+    audio_in = I2S(
+        0,
+        sck=Pin(I2S_SCK),
+        ws=Pin(I2S_WS),
+        sd=Pin(I2S_SD),
+        mode=I2S.RX,
+        bits=16,
+        format=I2S.MONO,
+        rate=SAMPLE_RATE,
+        ibuf=20000,
+    )
 
-    print("Calibrating mic offset...", end="")
-    total = 0
-    for _ in range(500):
-        total += mic.read_u16()
-        time.sleep_us(1000)
-    midpoint = total // 500
-    print(f" midpoint={midpoint}")
+    print(f"I2S mic initialized: INMP441 at {SAMPLE_RATE} Hz")
+    print(f"Streaming to {SERVER_IP}:{SERVER_PORT}")
 
-    print(
-        f"Streaming to {SERVER_IP}:{SERVER_PORT} at {SAMPLE_RATE} Hz, gain={GAIN}x")
-
-    INFO_INTERVAL_MS = 60_000
     VIS_INTERVAL_MS = 2_000
+    INFO_INTERVAL_MS = 60_000
 
     while True:
         sock = tcp_connect(wifi_ip)
         buf = bytearray(PACKET_FRAMES * 2)
-        idx = 0
-        t_next = time.ticks_us()
         stream_start = time.ticks_ms()
         total_bytes = 0
         last_display = 0
-        pkt_count = 0
 
-        update_display(wifi_ip, True, 0, 0, midpoint)
-        pk = 0
+        update_display(wifi_ip, True, 0, 0)
 
         try:
             while True:
-                t_next = time.ticks_add(t_next, interval_us)
-                while time.ticks_diff(t_next, time.ticks_us()) > 0:
-                    pass
+                num_read = audio_in.readinto(buf)
+                if num_read == 0:
+                    continue
 
-                raw = mic.read_u16()
-                sample = (raw - midpoint) * GAIN
-                if sample > 32767:
-                    sample = 32767
-                elif sample < -32768:
-                    sample = -32768
+                sock.send(buf[:num_read])
+                total_bytes += num_read
 
-                av = sample if sample >= 0 else -sample
-                if av > pk:
-                    pk = av
+                # Compute peak for VU meter
+                pk = 0
+                for i in range(0, num_read, 2):
+                    sample = buf[i] | (buf[i + 1] << 8)
+                    if sample >= 0x8000:
+                        sample -= 0x10000
+                    av = sample if sample >= 0 else -sample
+                    if av > pk:
+                        pk = av
 
-                buf[idx] = sample & 0xFF
-                buf[idx + 1] = (sample >> 8) & 0xFF
-                idx += 2
+                pkt_peak = pk
+                vu_level = min(pk * 220 // 32768, 220)
+                vu_history[vu_pos] = vu_level
+                vu_pos = (vu_pos + 1) % len(vu_history)
 
-                if HAS_LCD and pkt_count % wave_downsample == 0:
-                    wave_buf[wave_idx] = sample
-                    wave_idx = (wave_idx + 1) % 240
-                pkt_count += 1
+                # Waveform buffer (downsample)
+                if HAS_LCD:
+                    step = num_read // 2 // 240 or 1
+                    for j in range(0, min(num_read, 480), step * 2):
+                        s = buf[j] | (buf[j + 1] << 8)
+                        if s >= 0x8000:
+                            s -= 0x10000
+                        wave_buf[wave_idx] = s
+                        wave_idx = (wave_idx + 1) % 240
 
-                if idx >= len(buf):
-                    sock.send(buf)
-                    idx = 0
-                    total_bytes += len(buf)
-                    time.sleep_ms(1)
-
-                    pkt_peak = pk
-                    vu_level = min(pk * 220 // 32768, 220)
-                    vu_history[vu_pos] = vu_level
-                    vu_pos = (vu_pos + 1) % len(vu_history)
-                    pk = 0
-
-                    if check_joystick():
-                        now = time.ticks_ms()
+                # Display update
+                if check_joystick():
+                    now = time.ticks_ms()
+                    elapsed = time.ticks_diff(now, stream_start) // 1000
+                    sent_mb = total_bytes / (1024 * 1024)
+                    update_display(wifi_ip, True, elapsed, sent_mb)
+                    last_display = now
+                else:
+                    now = time.ticks_ms()
+                    interval = INFO_INTERVAL_MS if current_screen == SCREEN_INFO else VIS_INTERVAL_MS
+                    if time.ticks_diff(now, last_display) > interval:
                         elapsed = time.ticks_diff(now, stream_start) // 1000
                         sent_mb = total_bytes / (1024 * 1024)
-                        update_display(wifi_ip, True, elapsed,
-                                       sent_mb, midpoint)
+                        update_display(wifi_ip, True, elapsed, sent_mb)
                         last_display = now
-                    else:
-                        now = time.ticks_ms()
-                        interval = INFO_INTERVAL_MS if current_screen == SCREEN_INFO else VIS_INTERVAL_MS
-                        if time.ticks_diff(now, last_display) > interval:
-                            elapsed = time.ticks_diff(
-                                now, stream_start) // 1000
-                            sent_mb = total_bytes / (1024 * 1024)
-                            update_display(
-                                wifi_ip, True, elapsed, sent_mb, midpoint)
-                            last_display = now
 
         except OSError as e:
             print(f"Connection lost ({e}), reconnecting...")
@@ -364,12 +358,23 @@ def run():
         elapsed = time.ticks_diff(time.ticks_ms(), stream_start) // 1000
         sent_mb = total_bytes / (1024 * 1024)
         if HAS_LCD:
-            draw_info(wifi_ip, False, elapsed, sent_mb,
-                      midpoint, "Reconnecting...")
+            draw_info(wifi_ip, False, elapsed, sent_mb, "Reconnecting...")
         try:
             sock.close()
         except:
             pass
+        audio_in.deinit()
+        audio_in = I2S(
+            0,
+            sck=Pin(I2S_SCK),
+            ws=Pin(I2S_WS),
+            sd=Pin(I2S_SD),
+            mode=I2S.RX,
+            bits=16,
+            format=I2S.MONO,
+            rate=SAMPLE_RATE,
+            ibuf=20000,
+        )
         time.sleep(1)
 
 

@@ -2,9 +2,10 @@
 """
 TCP → WAV bridge for BirdNET-Pi.
 
-Accepts a TCP connection from a Pico 2W streaming raw s16le PCM at 16 kHz,
-pipes it through ffmpeg for filtering and resampling, and writes 15-second
-WAV files directly to BirdNET-Pi's StreamData folder.
+Accepts a TCP connection from a Pico 2W streaming raw s16le PCM at 22050 Hz
+(from INMP441 I2S digital mic), pipes it through ffmpeg for filtering and
+resampling, and writes 15-second WAV files directly to BirdNET-Pi's
+StreamData folder.
 
 Install:
     sudo cp birdnet_mic_bridge.py /opt/mic_bridge/birdnet_mic_bridge.py
@@ -25,7 +26,7 @@ BUFFER_SIZE = 4096
 CONN_TIMEOUT_SEC = int(os.environ.get("CONN_TIMEOUT_SEC", "45"))
 PROGRESS_LOG_MB = float(os.environ.get("PROGRESS_LOG_MB", "1.0"))
 
-INPUT_RATE = 16000
+INPUT_RATE = 22050
 OUTPUT_RATE = 48000
 CHANNELS = 1
 SEGMENT_SEC = 15
@@ -54,7 +55,7 @@ def start_ffmpeg():
             "-ar", str(INPUT_RATE),
             "-ac", str(CHANNELS),
             "-i", "pipe:0",
-            "-af", "highpass=f=500:poles=2,highpass=f=500:poles=2,lowpass=f=7500,volume=2",
+            "-af", "highpass=f=200:poles=2,lowpass=f=10000",
             "-ar", str(OUTPUT_RATE),
             "-ac", str(CHANNELS),
             "-f", "segment",
@@ -77,7 +78,7 @@ def main():
 
     print(f"[bridge] Listening on :{LISTEN_PORT}")
     print(f"[bridge] Writing {SEGMENT_SEC}s WAV files to {RECS_DIR}")
-    print(f"[bridge] Filters: 2x HP 500Hz, LP 7500Hz, volume 2x")
+    print(f"[bridge] Filters: HP 200Hz, LP 10kHz (I2S — no volume boost needed)")
     print(f"[bridge] Socket timeout: {CONN_TIMEOUT_SEC}s")
     print(f"[bridge] Progress log interval: {PROGRESS_LOG_MB:.1f} MB")
     print(f"[bridge] No ALSA loopback needed for recording!")
