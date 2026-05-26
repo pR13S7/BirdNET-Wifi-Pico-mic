@@ -13,7 +13,7 @@ except Exception:
 WIFI_SSID = "YOUR_WIFI_SSID"
 WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 
-SERVER_IP = "192.168.1.XXX"
+SERVER_IP = "192.168.0.50"
 SERVER_PORT = 5005
 
 SAMPLE_RATE = 22050
@@ -29,7 +29,7 @@ I2S_SD = 18
 
 led = Pin("LED", Pin.OUT)
 
-# ── Viper-accelerated DSP functions ──────────────────────
+# ── DSP functions ────────────────────────────────────────
 
 
 @micropython.viper
@@ -72,32 +72,13 @@ else:
     BTN_PREV = BTN_NEXT = None
 
 SCREEN_INFO = 0
-SCREEN_VU = 1
-SCREEN_WAVE = 2
-SCREEN_OFF = 3
-SCREEN_COUNT = 4
+SCREEN_OFF = 1
+SCREEN_COUNT = 2
 current_screen = SCREEN_INFO
 
 # ── Audio stats collected during streaming ────────────────
 
 pkt_peak = 0
-vu_history = bytearray(220)
-vu_pos = 0
-wave_buf = [0] * 240
-wave_idx = 0
-wave_downsample = PACKET_FRAMES // 240 or 1
-
-# ── Color helpers for VU bars ─────────────────────────────
-
-
-def vu_color(level):
-    if level > 200:
-        return RED
-    if level > 140:
-        return ORANGE
-    if level > 80:
-        return YELLOW
-    return GREEN
 
 # ── Display helpers ───────────────────────────────────────
 
@@ -144,74 +125,9 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
         lcd.hline(4, 220, 232, GRAY)
         lcd.text(msg, 4, 228, ORANGE)
 
-    lcd.text("[1/3] Info", 170, 4, GRAY)
+    lcd.text("Info [1/3]", 150, 4, GRAY)
     lcd.show()
 
-
-def draw_vu():
-    lcd.clear()
-    lcd.text("VU Meter", 4, 4, GREEN)
-    lcd.text("[2/3]", 192, 4, GRAY)
-    lcd.hline(4, 16, 232, GRAY)
-
-    bar_w = 30
-    level = min(pkt_peak * 220 // 32768, 220)
-    bar_y = 240 - 18 - level
-    lcd.fill_rect(4, 240 - 18, bar_w, -220, BLACK)
-    lcd.fill_rect(4, bar_y, bar_w, level, vu_color(level))
-    lcd.rect(4, 20, bar_w, 220, GRAY)
-
-    lcd.text("0", 36, 20, RED)
-    lcd.text("-6", 36, 55, ORANGE)
-    lcd.text("-12", 36, 90, YELLOW)
-    lcd.text("-24", 36, 145, GREEN)
-    lcd.text("-48", 36, 210, GRAY)
-
-    hist_x0 = 72
-    hist_w = 164
-    lcd.rect(hist_x0, 20, hist_w, 220, GRAY)
-
-    cols = min(len(vu_history), hist_w)
-    for i in range(cols):
-        hi = (vu_pos - cols + i) % len(vu_history)
-        h = vu_history[hi]
-        if h > 0:
-            x = hist_x0 + i
-            lcd.vline(x, 240 - 18 - h, h, vu_color(h))
-
-    lcd.show()
-
-
-def draw_waveform():
-    lcd.clear()
-    lcd.text("Waveform", 4, 4, CYAN)
-    lcd.text("[3/3]", 192, 4, GRAY)
-    lcd.hline(4, 16, 232, GRAY)
-
-    mid_y = 130
-    scale_h = 100
-
-    lcd.hline(0, mid_y, 240, GRAY)
-    lcd.hline(0, mid_y - scale_h, 240, GRAY)
-    lcd.hline(0, mid_y + scale_h, 240, GRAY)
-    lcd.text("+max", 0, mid_y - scale_h - 10, GRAY)
-    lcd.text("-max", 0, mid_y + scale_h + 2, GRAY)
-    lcd.text("0", 0, mid_y - 10, GRAY)
-
-    prev_y = mid_y
-    for x in range(240):
-        wi = (wave_idx + x) % 240
-        s = wave_buf[wi]
-        py = mid_y - (s * scale_h // 32768)
-        if py < 20:
-            py = 20
-        elif py > 238:
-            py = 238
-        if x > 0:
-            lcd.line(x - 1, prev_y, x, py, GREEN)
-        prev_y = py
-
-    lcd.show()
 
 
 def update_display(wifi_ip, bridge, uptime_s, sent_mb, msg=None):
@@ -223,10 +139,6 @@ def update_display(wifi_ip, bridge, uptime_s, sent_mb, msg=None):
     lcd.backlight(True)
     if current_screen == SCREEN_INFO:
         draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg)
-    elif current_screen == SCREEN_VU:
-        draw_vu()
-    elif current_screen == SCREEN_WAVE:
-        draw_waveform()
 
 
 def check_joystick():
@@ -313,7 +225,7 @@ def tcp_connect(wifi_ip):
 
 
 def run():
-    global pkt_peak, vu_pos, wave_idx
+    global pkt_peak
 
     wlan, wifi_ip = connect_wifi()
 
@@ -332,7 +244,6 @@ def run():
     print(f"I2S mic initialized: INMP441 at {SAMPLE_RATE} Hz")
     print(f"Streaming to {SERVER_IP}:{SERVER_PORT}")
 
-    VIS_INTERVAL_MS = 2_000
     INFO_INTERVAL_MS = 60_000
 
     dc_estimate = 0
@@ -360,21 +271,7 @@ def run():
                 sock.send(out[:j])
                 total_bytes += j
 
-                # Compute peak for VU meter (viper-accelerated)
                 pkt_peak = compute_peak(out, j)
-                vu_level = min(pkt_peak * 220 // 32768, 220)
-                vu_history[vu_pos] = vu_level
-                vu_pos = (vu_pos + 1) % len(vu_history)
-
-                # Waveform buffer (downsample)
-                if HAS_LCD:
-                    step = j // 2 // 240 or 1
-                    for wi in range(0, min(j, 480), step * 2):
-                        s = out[wi] | (out[wi + 1] << 8)
-                        if s >= 0x8000:
-                            s -= 0x10000
-                        wave_buf[wave_idx] = s
-                        wave_idx = (wave_idx + 1) % 240
 
                 # Display update
                 if check_joystick():
@@ -385,7 +282,7 @@ def run():
                     last_display = now
                 else:
                     now = time.ticks_ms()
-                    interval = INFO_INTERVAL_MS if current_screen == SCREEN_INFO else VIS_INTERVAL_MS
+                    interval = INFO_INTERVAL_MS
                     if time.ticks_diff(now, last_display) > interval:
                         elapsed = time.ticks_diff(now, stream_start) // 1000
                         sent_mb = total_bytes / (1024 * 1024)
