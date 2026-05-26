@@ -74,7 +74,8 @@ else:
 SCREEN_INFO = 0
 SCREEN_VU = 1
 SCREEN_WAVE = 2
-SCREEN_COUNT = 3
+SCREEN_OFF = 3
+SCREEN_COUNT = 4
 current_screen = SCREEN_INFO
 
 # ── Audio stats collected during streaming ────────────────
@@ -216,6 +217,10 @@ def draw_waveform():
 def update_display(wifi_ip, bridge, uptime_s, sent_mb, msg=None):
     if not HAS_LCD:
         return
+    if current_screen == SCREEN_OFF:
+        lcd.backlight(False)
+        return
+    lcd.backlight(True)
     if current_screen == SCREEN_INFO:
         draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg)
     elif current_screen == SCREEN_VU:
