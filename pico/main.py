@@ -76,18 +76,18 @@ else:
 SCREEN_INFO = 0
 SCREEN_OFF = 1
 SCREEN_COUNT = 2
-current_screen = SCREEN_INFO
+current_screen = [SCREEN_INFO]
 
 # ── Audio stats collected during streaming ────────────────
 
-pkt_peak = 0
-stat_pkts = 0
-stat_worst_ms = 0
-stat_dsp_ms = 0
-stat_send_ms = 0
-stat_mem = 0
-stat_kbps = 0
-stat_rssi = 0
+pkt_peak = [0]
+stat_pkts = [0]
+stat_worst_ms = [0]
+stat_dsp_ms = [0]
+stat_send_ms = [0]
+stat_mem = [0]
+stat_kbps = [0]
+stat_rssi = [0]
 
 # ── Display helpers ───────────────────────────────────────
 
@@ -108,7 +108,7 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
     lcd.hline(4, 16, 232, GRAY)
 
     if wifi_ip:
-        lcd.text(f"WiFi: OK  {stat_rssi}dBm", 4, 24, GREEN)
+        lcd.text(f"WiFi: OK  {stat_rssi[0]}dBm", 4, 24, GREEN)
         lcd.text(wifi_ip, 4, 36, WHITE)
     else:
         lcd.text("WiFi: connecting", 4, 24, YELLOW)
@@ -124,14 +124,14 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
     lcd.hline(4, 84, 232, GRAY)
 
     lcd.text(f"Up: {fmt_uptime(uptime_s)}", 4, 92, WHITE)
-    lcd.text(f"Sent: {sent_mb:.1f} MB  {stat_kbps:.0f} KB/s", 4, 104, GREEN)
-    lcd.text(f"Pkts: {stat_pkts}  Pk: {pkt_peak}", 4, 116, CYAN)
+    lcd.text(f"Sent: {sent_mb:.1f} MB  {stat_kbps[0]:.0f} KB/s", 4, 104, GREEN)
+    lcd.text(f"Pkts: {stat_pkts[0]}  Pk: {pkt_peak[0]}", 4, 116, CYAN)
 
     lcd.hline(4, 128, 232, GRAY)
 
-    lcd.text(f"Loop: {stat_worst_ms}ms  Crash: {crash_count}", 4, 136, ORANGE)
-    lcd.text(f"DSP: {stat_dsp_ms}ms  TX: {stat_send_ms}ms", 4, 148, YELLOW)
-    lcd.text(f"Mem: {stat_mem}", 4, 160, GRAY)
+    lcd.text(f"Loop: {stat_worst_ms[0]}ms  Crash: {crash_count}", 4, 136, ORANGE)
+    lcd.text(f"DSP: {stat_dsp_ms[0]}ms  TX: {stat_send_ms[0]}ms", 4, 148, YELLOW)
+    lcd.text(f"Mem: {stat_mem[0]}", 4, 160, GRAY)
 
     if msg:
         lcd.hline(4, 220, 232, GRAY)
@@ -143,26 +143,25 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
 def update_display(wifi_ip, bridge, uptime_s, sent_mb, msg=None):
     if not HAS_LCD:
         return
-    if current_screen == SCREEN_OFF:
+    if current_screen[0] == SCREEN_OFF:
         lcd.backlight(False)
         return
     lcd.backlight(True)
-    if current_screen == SCREEN_INFO:
+    if current_screen[0] == SCREEN_INFO:
         draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg)
 
 
 def check_joystick():
-    global current_screen
     if not HAS_LCD:
         return False
     changed = False
     if BTN_PREV.value() == 0:
-        current_screen = (current_screen - 1) % SCREEN_COUNT
+        current_screen[0] = (current_screen[0] - 1) % SCREEN_COUNT
         changed = True
         while BTN_PREV.value() == 0:
             time.sleep_ms(10)
     elif BTN_NEXT.value() == 0:
-        current_screen = (current_screen + 1) % SCREEN_COUNT
+        current_screen[0] = (current_screen[0] + 1) % SCREEN_COUNT
         changed = True
         while BTN_NEXT.value() == 0:
             time.sleep_ms(10)
@@ -236,9 +235,6 @@ def tcp_connect(wifi_ip):
 
 
 def run():
-    global pkt_peak, stat_pkts, stat_worst_ms, stat_dsp_ms, stat_send_ms
-    global stat_mem, stat_kbps, stat_rssi
-
     wlan, wifi_ip = connect_wifi()
 
     audio_in = I2S(
@@ -298,9 +294,9 @@ def run():
                 t_send = time.ticks_diff(time.ticks_ms(), t0)
                 total_bytes += j
 
-                pkt_peak = compute_peak(out, j)
-                stat_dsp_ms = t_dsp
-                stat_send_ms = t_send
+                pkt_peak[0] = compute_peak(out, j)
+                stat_dsp_ms[0] = t_dsp
+                stat_send_ms[0] = t_send
 
                 # Heartbeat
                 pkt_count += 1
@@ -313,16 +309,16 @@ def run():
                     print(f"[SLOW] {pkt_ms}ms dsp={t_dsp}ms send={t_send}ms")
                 if time.ticks_diff(now_hb, last_hb) > HB_MS:
                     gc.collect()
-                    stat_pkts = pkt_count
-                    stat_worst_ms = max_loop_ms
-                    stat_mem = gc.mem_free()
+                    stat_pkts[0] = pkt_count
+                    stat_worst_ms[0] = max_loop_ms
+                    stat_mem[0] = gc.mem_free()
                     elapsed_s = time.ticks_diff(now_hb, stream_start) // 1000
-                    stat_kbps = total_bytes / 1024 / max(elapsed_s, 1)
+                    stat_kbps[0] = total_bytes / 1024 / max(elapsed_s, 1)
                     try:
-                        stat_rssi = wlan.status('rssi')
+                        stat_rssi[0] = wlan.status('rssi')
                     except:
                         pass
-                    print(f"[HB] pkt={pkt_count} mem={stat_mem} worst={max_loop_ms}ms kb={total_bytes//1024}")
+                    print(f"[HB] pkt={pkt_count} mem={stat_mem[0]} worst={max_loop_ms}ms kb={total_bytes//1024}")
                     last_hb = now_hb
                     max_loop_ms = 0
 
