@@ -32,11 +32,11 @@ led = Pin("LED", Pin.OUT)
 # ── DSP functions ────────────────────────────────────────
 
 
-@micropython.viper
-def extract_left_dc(buf32: ptr8, buf16: ptr8, n: int, dc: int) -> int:
+@micropython.native
+def extract_left_dc(buf32, buf16, n, dc):
     j = 0
     for i in range(0, n, 8):
-        sample = int(buf32[i + 2]) | (int(buf32[i + 3]) << 8)
+        sample = buf32[i + 2] | (buf32[i + 3] << 8)
         if sample >= 0x8000:
             sample -= 0x10000
         dc = dc + (sample - dc) // 256
@@ -51,16 +51,17 @@ def extract_left_dc(buf32: ptr8, buf16: ptr8, n: int, dc: int) -> int:
     return dc
 
 
-@micropython.viper
-def compute_peak(buf: ptr8, n: int) -> int:
+@micropython.native
+def compute_peak(buf, n):
     pk = 0
     for i in range(0, n, 2):
-        sample = int(buf[i]) | (int(buf[i + 1]) << 8)
+        sample = buf[i] | (buf[i + 1] << 8)
         if sample >= 0x8000:
             sample -= 0x10000
-        av = sample if sample >= 0 else -sample
-        if av > pk:
-            pk = av
+        if sample < 0:
+            sample = -sample
+        if sample > pk:
+            pk = sample
     return pk
 
 # ── Joystick for screen switching (Waveshare Pico LCD 1.3") ──
