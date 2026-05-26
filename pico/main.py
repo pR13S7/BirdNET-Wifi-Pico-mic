@@ -102,9 +102,12 @@ def vu_color(level):
 
 
 def fmt_uptime(sec):
-    h = sec // 3600
+    d = sec // 86400
+    h = (sec % 86400) // 3600
     m = (sec % 3600) // 60
     s = sec % 60
+    if d > 0:
+        return f"{d}d {h:02d}h {m:02d}m {s:02d}s"
     return f"{h}h {m:02d}m {s:02d}s"
 
 
