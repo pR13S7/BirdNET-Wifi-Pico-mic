@@ -4,3 +4,4 @@
 .vscode/settings.json
 pico/main.working.py
 .cursor
+pico/__pycache__

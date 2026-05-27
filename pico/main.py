@@ -1,7 +1,7 @@
 import time
 import socket
 import network
-from machine import I2S, Pin, idle
+from machine import I2S, Pin
 
 try:
     from lcd import LCD, WHITE, RED, GREEN, YELLOW, GRAY, ORANGE, CYAN
@@ -21,18 +21,12 @@ PACKET_FRAMES = 1024
 I2S_BITS = 32
 I2S_FMT = I2S.STEREO
 RECONNECT_DELAY = 3
-SOCKET_TIMEOUT_SEC = 20
-WIFI_HEARTBEAT_MS = 10_000
-MAX_SEND_FAIL_STREAK = 3
 
-# I2S pins (WS must be SCK + 1 on Pico)
 I2S_SCK = 16
 I2S_WS = 17
 I2S_SD = 18
 
 led = Pin("LED", Pin.OUT)
-
-# ── DSP functions ────────────────────────────────────────
 
 
 @micropython.native
@@ -44,20 +38,9 @@ def extract_left(buf32, buf16, n):
         j += 2
 
 
-# ── Audio stats collected during streaming ────────────────
-
-pkt_peak = [0]
-stat_pkts = [0]
-stat_worst_ms = [0]
-stat_dsp_ms = [0]
-stat_send_ms = [0]
-stat_mem = [0]
 stat_kbps = [0]
 stat_rssi = [0]
-stat_drop_pkts = [0]
-stat_send_errs = [0]
-
-# ── Display helpers ───────────────────────────────────────
+stat_pkts = [0]
 
 
 def fmt_uptime(sec):
@@ -93,13 +76,7 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
 
     lcd.text(f"Up: {fmt_uptime(uptime_s)}", 4, 92, WHITE)
     lcd.text(f"Sent: {sent_mb:.1f} MB  {stat_kbps[0]:.0f} KB/s", 4, 104, GREEN)
-    lcd.text(f"Pkt:{stat_pkts[0]} Dr:{stat_drop_pkts[0]} Pk:{pkt_peak[0]}", 4, 116, CYAN)
-
-    lcd.hline(4, 128, 232, GRAY)
-
-    lcd.text(f"Loop: {stat_worst_ms[0]}ms  Crash: {crash_count}", 4, 136, ORANGE)
-    lcd.text(f"DSP:{stat_dsp_ms[0]} TX:{stat_send_ms[0]} Err:{stat_send_errs[0]}", 4, 148, YELLOW)
-    lcd.text(f"Mem: {stat_mem[0]}", 4, 160, GRAY)
+    lcd.text(f"Pkts: {stat_pkts[0]}  Crash: {crash_count}", 4, 116, CYAN)
 
     if msg:
         lcd.hline(4, 220, 232, GRAY)
@@ -113,8 +90,6 @@ def update_display(wifi_ip, bridge, uptime_s, sent_mb, msg=None):
         return
     draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg)
 
-# ── WiFi connection with retry ────────────────────────────
-
 
 def connect_wifi():
     if HAS_LCD:
@@ -126,7 +101,7 @@ def connect_wifi():
     wlan.connect(WIFI_SSID, WIFI_PASSWORD)
 
     print("Connecting to WiFi", end="")
-    for attempt in range(30):
+    for _ in range(30):
         s = wlan.status()
         if s == 3:
             break
@@ -154,13 +129,11 @@ def connect_wifi():
         draw_info(ip, False, 0, 0, "WiFi OK")
     return wlan, ip
 
-# ── TCP connect with retry ────────────────────────────────
-
 
 def tcp_connect(wifi_ip):
     if HAS_LCD:
         draw_info(wifi_ip, False, 0, 0, "Connecting TCP...")
-    while True:
+    for attempt in range(3):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect((SERVER_IP, SERVER_PORT))
@@ -175,18 +148,7 @@ def tcp_connect(wifi_ip):
             except:
                 pass
             time.sleep(RECONNECT_DELAY)
-
-
-def send_exact(sock, data_mv, nbytes):
-    sent = 0
-    while sent < nbytes:
-        chunk_sent = sock.send(data_mv[sent:nbytes])
-        if not chunk_sent:
-            raise OSError("socket send returned 0")
-        sent += chunk_sent
-    return sent
-
-# ── Main ──────────────────────────────────────────────────
+    raise OSError("TCP connect failed 10 times, WiFi likely dead")
 
 
 def run():
@@ -204,34 +166,20 @@ def run():
         ibuf=40000,
     )
 
-    print(f"I2S mic initialized: INMP441 at {SAMPLE_RATE} Hz")
-    print(f"Streaming to {SERVER_IP}:{SERVER_PORT}")
+    print(f"I2S: INMP441 at {SAMPLE_RATE} Hz → {SERVER_IP}:{SERVER_PORT}")
 
-    INFO_INTERVAL_MS = 60_000
+    buf = bytearray(PACKET_FRAMES * 8)
+    out = bytearray(PACKET_FRAMES * 2)
+    out_mv = memoryview(out)
 
     while True:
-        if not wlan.isconnected():
-            print("[pico] WiFi link down, reconnecting WiFi...")
-            wlan, wifi_ip = connect_wifi()
-
         sock = tcp_connect(wifi_ip)
-        buf = bytearray(PACKET_FRAMES * 8)
-        out = bytearray(PACKET_FRAMES * 2)
-        out_mv = memoryview(out)
-        stream_start = time.ticks_ms()
+        sock.settimeout(30)
         total_bytes = 0
-        sent_packets = 0
-        dropped_packets = 0
-        send_errors = 0
-        send_fail_streak = 0
-        last_wifi_check = stream_start
-        last_display = stream_start
-        stat_pkts[0] = 0
-        stat_drop_pkts[0] = 0
-        stat_send_errs[0] = 0
+        start = time.ticks_ms()
+        last_log = start
 
         update_display(wifi_ip, True, 0, 0)
-        sock.settimeout(SOCKET_TIMEOUT_SEC)
 
         try:
             while True:
@@ -242,79 +190,33 @@ def run():
                 extract_left(buf, out, num_read)
                 j = num_read // 4
 
+                sock.send(out_mv[:j])
+                total_bytes += j
+
                 now = time.ticks_ms()
-                if time.ticks_diff(now, last_wifi_check) > WIFI_HEARTBEAT_MS:
-                    last_wifi_check = now
-                    if not wlan.isconnected():
-                        raise OSError("wifi disconnected")
-
-                try:
-                    sent = send_exact(sock, out_mv, j)
-                except OSError:
-                    send_errors += 1
-                    send_fail_streak += 1
-                    dropped_packets += 1
-                    stat_drop_pkts[0] = dropped_packets
-                    stat_send_errs[0] = send_errors
-                    if send_fail_streak >= MAX_SEND_FAIL_STREAK:
-                        raise
-                    continue
-
-                total_bytes += sent
-                sent_packets += 1
-                send_fail_streak = 0
-                idle()
-
-                if time.ticks_diff(now, last_display) > INFO_INTERVAL_MS:
-                    elapsed = time.ticks_diff(now, stream_start) // 1000
+                if time.ticks_diff(now, last_log) > 60_000:
+                    elapsed = time.ticks_diff(now, start) // 1000
                     sent_mb = total_bytes / (1024 * 1024)
                     stat_kbps[0] = total_bytes / 1024 / max(elapsed, 1)
-                    stat_pkts[0] = sent_packets
-                    stat_drop_pkts[0] = dropped_packets
-                    stat_send_errs[0] = send_errors
+                    stat_pkts[0] = total_bytes // (PACKET_FRAMES * 2)
                     try:
                         stat_rssi[0] = wlan.status('rssi')
                     except:
                         pass
-                    print(
-                        f"[pico] {elapsed}s {stat_kbps[0]:.0f}KB/s sent={sent_mb:.1f}MB "
-                        f"pkt={sent_packets} drop={dropped_packets} err={send_errors}"
-                    )
+                    print(f"[pico] {elapsed}s {stat_kbps[0]:.0f}KB/s sent={sent_mb:.1f}MB")
                     update_display(wifi_ip, True, elapsed, sent_mb)
-                    last_display = now
+                    last_log = now
 
         except OSError as e:
-            print(
-                f"Connection lost ({e}), reconnecting... "
-                f"drop={dropped_packets} err={send_errors}"
-            )
-        except Exception as e:
-            print(f"Unexpected error ({type(e).__name__}: {e}), recovering...")
+            print(f"Connection lost ({e}), reconnecting...")
 
-        elapsed = time.ticks_diff(time.ticks_ms(), stream_start) // 1000
-        sent_mb = total_bytes / (1024 * 1024)
-        if HAS_LCD:
-            draw_info(wifi_ip, False, elapsed, sent_mb, "Reconnecting...")
         try:
             sock.close()
         except:
             pass
-        audio_in.deinit()
-        audio_in = I2S(
-            0,
-            sck=Pin(I2S_SCK),
-            ws=Pin(I2S_WS),
-            sd=Pin(I2S_SD),
-            mode=I2S.RX,
-            bits=I2S_BITS,
-            format=I2S_FMT,
-            rate=SAMPLE_RATE,
-            ibuf=40000,
-        )
         time.sleep(1)
 
 
-# Top-level crash guard — auto-restart on any unhandled exception
 crash_count = 0
 while True:
     try:
