@@ -1,7 +1,11 @@
 import time
 import socket
 import network
-from machine import I2S, Pin
+import rp2
+from machine import I2S, Pin, freq
+
+freq(150_000_000)
+rp2.country('UA')
 
 try:
     from lcd import LCD, WHITE, RED, GREEN, YELLOW, GRAY, ORANGE, CYAN

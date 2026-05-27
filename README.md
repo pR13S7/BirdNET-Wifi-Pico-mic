@@ -257,6 +257,18 @@ Open the BirdNET-Pi web UI at `http://birdnetpi.local`.
 | `arecord: Device or resource busy`             | `birdnet_recording.service` conflicts with bridge        | `sudo systemctl mask birdnet_recording.service`                                           |
 | Species excluded as "below occurrence"         | SF_THRESH too high for your location                     | Set `SF_THRESH=0.001` in `/etc/birdnet/birdnet.conf`                                     |
 
+### WiFi router settings (important for Pico 2W stability)
+
+The Pico 2W's CYW43439 WiFi chip is sensitive to radio conditions. These router settings significantly improve streaming stability:
+
+| Setting         | Recommended | Why                                                                 |
+| --------------- | ----------- | ------------------------------------------------------------------- |
+| Channel         | **1, 6, or 11** | Standard non-overlapping channels. Avoid channel 12+ (known CYW43 issues) |
+| Channel width   | **20 MHz**  | 40 MHz adds noise susceptibility; 20 KB/s stream doesn't need extra bandwidth |
+| Band            | **2.4 GHz** | Pico 2W does not support 5 GHz                                      |
+
+> **Tested result:** Switching from channel 12 / 40 MHz to channel 6 / 20 MHz doubled throughput (15-20 KB/s → 31 KB/s) and eliminated periodic stalls.
+
 ### Weatherproof outdoor deployment
 
 - Power the Pico 2W from a USB power bank (~40–80 mA over WiFi — a 1000 mAh bank gives **10+ hours**)
