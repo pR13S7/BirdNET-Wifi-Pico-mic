@@ -56,7 +56,7 @@ def start_ffmpeg():
             "-ar", str(INPUT_RATE),
             "-ac", str(CHANNELS),
             "-i", "pipe:0",
-            "-af", "highpass=f=200:poles=2,lowpass=f=10000",
+            "-af", "highpass=f=200:poles=2",
             "-ar", str(OUTPUT_RATE),
             "-ac", str(CHANNELS),
             "-f", "segment",
