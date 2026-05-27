@@ -6,7 +6,7 @@ from machine import I2S, Pin, idle
 try:
     from lcd import LCD, WHITE, RED, GREEN, YELLOW, GRAY, ORANGE, CYAN
     lcd = LCD()
-    HAS_LCD = False  # disabled for stability testing
+    HAS_LCD = True
 except Exception:
     HAS_LCD = False
 
@@ -16,11 +16,14 @@ WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 SERVER_IP = "192.168.0.50"
 SERVER_PORT = 5005
 
-SAMPLE_RATE = 22050
+SAMPLE_RATE = 16000
 PACKET_FRAMES = 1024
 I2S_BITS = 32
 I2S_FMT = I2S.STEREO
 RECONNECT_DELAY = 3
+SOCKET_TIMEOUT_SEC = 20
+WIFI_HEARTBEAT_MS = 10_000
+MAX_SEND_FAIL_STREAK = 3
 
 # I2S pins (WS must be SCK + 1 on Pico)
 I2S_SCK = 16
@@ -32,36 +35,13 @@ led = Pin("LED", Pin.OUT)
 # ── DSP functions ────────────────────────────────────────
 
 
-def extract_left_dc(buf32, buf16, n, dc):
+@micropython.native
+def extract_left(buf32, buf16, n):
     j = 0
     for i in range(0, n, 8):
-        sample = buf32[i + 2] | (buf32[i + 3] << 8)
-        if sample >= 0x8000:
-            sample -= 0x10000
-        dc = dc + (sample - dc) // 256
-        out = sample - dc
-        if out > 32767:
-            out = 32767
-        if out < -32768:
-            out = -32768
-        buf16[j] = out & 0xFF
-        buf16[j + 1] = (out >> 8) & 0xFF
+        buf16[j] = buf32[i + 2]
+        buf16[j + 1] = buf32[i + 3]
         j += 2
-    return dc
-
-
-def compute_peak(buf, n):
-    pk = 0
-    for i in range(0, n, 2):
-        sample = buf[i] | (buf[i + 1] << 8)
-        if sample >= 0x8000:
-            sample -= 0x10000
-        if sample < 0:
-            sample = -sample
-        if sample > pk:
-            pk = sample
-    return pk
-
 
 
 # ── Audio stats collected during streaming ────────────────
@@ -74,6 +54,8 @@ stat_send_ms = [0]
 stat_mem = [0]
 stat_kbps = [0]
 stat_rssi = [0]
+stat_drop_pkts = [0]
+stat_send_errs = [0]
 
 # ── Display helpers ───────────────────────────────────────
 
@@ -111,12 +93,12 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
 
     lcd.text(f"Up: {fmt_uptime(uptime_s)}", 4, 92, WHITE)
     lcd.text(f"Sent: {sent_mb:.1f} MB  {stat_kbps[0]:.0f} KB/s", 4, 104, GREEN)
-    lcd.text(f"Pkts: {stat_pkts[0]}  Pk: {pkt_peak[0]}", 4, 116, CYAN)
+    lcd.text(f"Pkt:{stat_pkts[0]} Dr:{stat_drop_pkts[0]} Pk:{pkt_peak[0]}", 4, 116, CYAN)
 
     lcd.hline(4, 128, 232, GRAY)
 
     lcd.text(f"Loop: {stat_worst_ms[0]}ms  Crash: {crash_count}", 4, 136, ORANGE)
-    lcd.text(f"DSP: {stat_dsp_ms[0]}ms  TX: {stat_send_ms[0]}ms", 4, 148, YELLOW)
+    lcd.text(f"DSP:{stat_dsp_ms[0]} TX:{stat_send_ms[0]} Err:{stat_send_errs[0]}", 4, 148, YELLOW)
     lcd.text(f"Mem: {stat_mem[0]}", 4, 160, GRAY)
 
     if msg:
@@ -194,6 +176,16 @@ def tcp_connect(wifi_ip):
                 pass
             time.sleep(RECONNECT_DELAY)
 
+
+def send_exact(sock, data_mv, nbytes):
+    sent = 0
+    while sent < nbytes:
+        chunk_sent = sock.send(data_mv[sent:nbytes])
+        if not chunk_sent:
+            raise OSError("socket send returned 0")
+        sent += chunk_sent
+    return sent
+
 # ── Main ──────────────────────────────────────────────────
 
 
@@ -217,18 +209,29 @@ def run():
 
     INFO_INTERVAL_MS = 60_000
 
-    dc_estimate = 0
-
     while True:
+        if not wlan.isconnected():
+            print("[pico] WiFi link down, reconnecting WiFi...")
+            wlan, wifi_ip = connect_wifi()
+
         sock = tcp_connect(wifi_ip)
         buf = bytearray(PACKET_FRAMES * 8)
         out = bytearray(PACKET_FRAMES * 2)
         out_mv = memoryview(out)
         stream_start = time.ticks_ms()
         total_bytes = 0
-        last_display = 0
+        sent_packets = 0
+        dropped_packets = 0
+        send_errors = 0
+        send_fail_streak = 0
+        last_wifi_check = stream_start
+        last_display = stream_start
+        stat_pkts[0] = 0
+        stat_drop_pkts[0] = 0
+        stat_send_errs[0] = 0
 
         update_display(wifi_ip, True, 0, 0)
+        sock.settimeout(SOCKET_TIMEOUT_SEC)
 
         try:
             while True:
@@ -236,31 +239,55 @@ def run():
                 if num_read == 0:
                     continue
 
-                # Extract left channel, remove DC offset
-                dc_estimate = extract_left_dc(buf, out, num_read, dc_estimate)
-                j = num_read // 4  # stereo 32-bit pairs → mono 16-bit bytes
+                extract_left(buf, out, num_read)
+                j = num_read // 4
 
-                sock.send(out_mv[:j])
-                total_bytes += j
+                now = time.ticks_ms()
+                if time.ticks_diff(now, last_wifi_check) > WIFI_HEARTBEAT_MS:
+                    last_wifi_check = now
+                    if not wlan.isconnected():
+                        raise OSError("wifi disconnected")
+
+                try:
+                    sent = send_exact(sock, out_mv, j)
+                except OSError:
+                    send_errors += 1
+                    send_fail_streak += 1
+                    dropped_packets += 1
+                    stat_drop_pkts[0] = dropped_packets
+                    stat_send_errs[0] = send_errors
+                    if send_fail_streak >= MAX_SEND_FAIL_STREAK:
+                        raise
+                    continue
+
+                total_bytes += sent
+                sent_packets += 1
+                send_fail_streak = 0
                 idle()
 
-                pkt_peak[0] = compute_peak(out, j)
-
-                # Display update (every 60s)
-                if time.ticks_diff(time.ticks_ms(), last_display) > INFO_INTERVAL_MS:
-                    now = time.ticks_ms()
+                if time.ticks_diff(now, last_display) > INFO_INTERVAL_MS:
                     elapsed = time.ticks_diff(now, stream_start) // 1000
                     sent_mb = total_bytes / (1024 * 1024)
                     stat_kbps[0] = total_bytes / 1024 / max(elapsed, 1)
+                    stat_pkts[0] = sent_packets
+                    stat_drop_pkts[0] = dropped_packets
+                    stat_send_errs[0] = send_errors
                     try:
                         stat_rssi[0] = wlan.status('rssi')
                     except:
                         pass
+                    print(
+                        f"[pico] {elapsed}s {stat_kbps[0]:.0f}KB/s sent={sent_mb:.1f}MB "
+                        f"pkt={sent_packets} drop={dropped_packets} err={send_errors}"
+                    )
                     update_display(wifi_ip, True, elapsed, sent_mb)
                     last_display = now
 
         except OSError as e:
-            print(f"Connection lost ({e}), reconnecting...")
+            print(
+                f"Connection lost ({e}), reconnecting... "
+                f"drop={dropped_packets} err={send_errors}"
+            )
         except Exception as e:
             print(f"Unexpected error ({type(e).__name__}: {e}), recovering...")
 
