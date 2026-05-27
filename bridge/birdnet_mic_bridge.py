@@ -19,6 +19,7 @@ import subprocess
 import sys
 import signal
 import os
+import time
 
 LISTEN_IP = "0.0.0.0"
 LISTEN_PORT = 5005
@@ -99,6 +100,8 @@ def main():
         byte_count = 0
         progress_step_bytes = max(int(PROGRESS_LOG_MB * 1024 * 1024), 1024 * 1024)
         next_log_at = progress_step_bytes
+        last_rate_time = time.time()
+        last_rate_bytes = 0
 
         try:
             while True:
@@ -107,6 +110,15 @@ def main():
                     break
                 proc.stdin.write(data)
                 byte_count += len(data)
+
+                now = time.time()
+                dt = now - last_rate_time
+                if dt >= 10.0:
+                    rate = (byte_count - last_rate_bytes) / dt / 1024
+                    print(f"[bridge] {byte_count/1024:.0f} KB  {rate:.1f} KB/s", flush=True)
+                    last_rate_time = now
+                    last_rate_bytes = byte_count
+
                 if byte_count >= next_log_at:
                     mb = byte_count / (1024 * 1024)
                     print(f"[bridge] {mb:.1f} MB received", flush=True)

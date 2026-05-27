@@ -1,13 +1,12 @@
-import gc
 import time
 import socket
 import network
-from machine import I2S, Pin
+from machine import I2S, Pin, idle
 
 try:
     from lcd import LCD, WHITE, RED, GREEN, YELLOW, GRAY, ORANGE, CYAN
     lcd = LCD()
-    HAS_LCD = True
+    HAS_LCD = False  # disabled for stability testing
 except Exception:
     HAS_LCD = False
 
@@ -18,7 +17,7 @@ SERVER_IP = "192.168.0.50"
 SERVER_PORT = 5005
 
 SAMPLE_RATE = 22050
-PACKET_FRAMES = 512
+PACKET_FRAMES = 1024
 I2S_BITS = 32
 I2S_FMT = I2S.STEREO
 RECONNECT_DELAY = 3
@@ -33,7 +32,6 @@ led = Pin("LED", Pin.OUT)
 # ── DSP functions ────────────────────────────────────────
 
 
-@micropython.native
 def extract_left_dc(buf32, buf16, n, dc):
     j = 0
     for i in range(0, n, 8):
@@ -52,7 +50,6 @@ def extract_left_dc(buf32, buf16, n, dc):
     return dc
 
 
-@micropython.native
 def compute_peak(buf, n):
     pk = 0
     for i in range(0, n, 2):
@@ -65,18 +62,7 @@ def compute_peak(buf, n):
             pk = sample
     return pk
 
-# ── Joystick for screen switching (Waveshare Pico LCD 1.3") ──
 
-if HAS_LCD:
-    BTN_PREV = Pin(2, Pin.IN, Pin.PULL_UP)   # Joystick UP
-    BTN_NEXT = Pin(15, Pin.IN, Pin.PULL_UP)  # Key A
-else:
-    BTN_PREV = BTN_NEXT = None
-
-SCREEN_INFO = 0
-SCREEN_OFF = 1
-SCREEN_COUNT = 2
-current_screen = [SCREEN_INFO]
 
 # ── Audio stats collected during streaming ────────────────
 
@@ -143,29 +129,7 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
 def update_display(wifi_ip, bridge, uptime_s, sent_mb, msg=None):
     if not HAS_LCD:
         return
-    if current_screen[0] == SCREEN_OFF:
-        lcd.backlight(False)
-        return
-    lcd.backlight(True)
-    if current_screen[0] == SCREEN_INFO:
-        draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg)
-
-
-def check_joystick():
-    if not HAS_LCD:
-        return False
-    changed = False
-    if BTN_PREV.value() == 0:
-        current_screen[0] = (current_screen[0] - 1) % SCREEN_COUNT
-        changed = True
-        while BTN_PREV.value() == 0:
-            time.sleep_ms(10)
-    elif BTN_NEXT.value() == 0:
-        current_screen[0] = (current_screen[0] + 1) % SCREEN_COUNT
-        changed = True
-        while BTN_NEXT.value() == 0:
-            time.sleep_ms(10)
-    return changed
+    draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg)
 
 # ── WiFi connection with retry ────────────────────────────
 
@@ -218,7 +182,6 @@ def tcp_connect(wifi_ip):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect((SERVER_IP, SERVER_PORT))
-            s.setblocking(False)
             print(f"TCP connected to {SERVER_IP}:{SERVER_PORT}")
             led.on()
             return s
@@ -253,18 +216,14 @@ def run():
     print(f"Streaming to {SERVER_IP}:{SERVER_PORT}")
 
     INFO_INTERVAL_MS = 60_000
-    HB_MS = 10_000
 
     dc_estimate = 0
-    last_hb = time.ticks_ms()
-    last_pkt_time = last_hb
-    pkt_count = 0
-    max_loop_ms = 0
 
     while True:
         sock = tcp_connect(wifi_ip)
         buf = bytearray(PACKET_FRAMES * 8)
         out = bytearray(PACKET_FRAMES * 2)
+        out_mv = memoryview(out)
         stream_start = time.ticks_ms()
         total_bytes = 0
         last_display = 0
@@ -278,65 +237,27 @@ def run():
                     continue
 
                 # Extract left channel, remove DC offset
-                t0 = time.ticks_ms()
                 dc_estimate = extract_left_dc(buf, out, num_read, dc_estimate)
                 j = num_read // 4  # stereo 32-bit pairs → mono 16-bit bytes
-                t_dsp = time.ticks_diff(time.ticks_ms(), t0)
 
-                t0 = time.ticks_ms()
-                try:
-                    sock.send(out[:j])
-                except OSError as e:
-                    if e.errno == 11:  # EAGAIN — WiFi busy, drop packet
-                        pass
-                    else:
-                        raise
-                t_send = time.ticks_diff(time.ticks_ms(), t0)
+                sock.send(out_mv[:j])
                 total_bytes += j
+                idle()
 
                 pkt_peak[0] = compute_peak(out, j)
-                stat_dsp_ms[0] = t_dsp
-                stat_send_ms[0] = t_send
 
-                # Heartbeat
-                pkt_count += 1
-                now_hb = time.ticks_ms()
-                pkt_ms = time.ticks_diff(now_hb, last_pkt_time)
-                last_pkt_time = now_hb
-                if pkt_ms > max_loop_ms:
-                    max_loop_ms = pkt_ms
-                if pkt_ms > 500:
-                    print(f"[SLOW] {pkt_ms}ms dsp={t_dsp}ms send={t_send}ms")
-                if time.ticks_diff(now_hb, last_hb) > HB_MS:
-                    gc.collect()
-                    stat_pkts[0] = pkt_count
-                    stat_worst_ms[0] = max_loop_ms
-                    stat_mem[0] = gc.mem_free()
-                    elapsed_s = time.ticks_diff(now_hb, stream_start) // 1000
-                    stat_kbps[0] = total_bytes / 1024 / max(elapsed_s, 1)
+                # Display update (every 60s)
+                if time.ticks_diff(time.ticks_ms(), last_display) > INFO_INTERVAL_MS:
+                    now = time.ticks_ms()
+                    elapsed = time.ticks_diff(now, stream_start) // 1000
+                    sent_mb = total_bytes / (1024 * 1024)
+                    stat_kbps[0] = total_bytes / 1024 / max(elapsed, 1)
                     try:
                         stat_rssi[0] = wlan.status('rssi')
                     except:
                         pass
-                    print(f"[HB] pkt={pkt_count} mem={stat_mem[0]} worst={max_loop_ms}ms kb={total_bytes//1024}")
-                    last_hb = now_hb
-                    max_loop_ms = 0
-
-                # Display update
-                if check_joystick():
-                    now = time.ticks_ms()
-                    elapsed = time.ticks_diff(now, stream_start) // 1000
-                    sent_mb = total_bytes / (1024 * 1024)
                     update_display(wifi_ip, True, elapsed, sent_mb)
                     last_display = now
-                else:
-                    now = time.ticks_ms()
-                    interval = INFO_INTERVAL_MS
-                    if time.ticks_diff(now, last_display) > interval:
-                        elapsed = time.ticks_diff(now, stream_start) // 1000
-                        sent_mb = total_bytes / (1024 * 1024)
-                        update_display(wifi_ip, True, elapsed, sent_mb)
-                        last_display = now
 
         except OSError as e:
             print(f"Connection lost ({e}), reconnecting...")
