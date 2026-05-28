@@ -22,12 +22,12 @@ import os
 import time
 
 LISTEN_IP = "0.0.0.0"
-LISTEN_PORT = 5005
+LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "5005"))
 BUFFER_SIZE = 4096
 CONN_TIMEOUT_SEC = int(os.environ.get("CONN_TIMEOUT_SEC", "45"))
 PROGRESS_LOG_MB = float(os.environ.get("PROGRESS_LOG_MB", "1.0"))
 
-INPUT_RATE = 16000
+INPUT_RATE = int(os.environ.get("INPUT_RATE", "16000"))
 OUTPUT_RATE = 48000
 CHANNELS = 1
 SEGMENT_SEC = 15

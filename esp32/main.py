@@ -9,10 +9,11 @@ WIFI_SSID = "YOUR_WIFI_SSID"
 WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 
 SERVER_IP = "192.168.0.50"
-SERVER_PORT = 5005
+# default is 5005 for single client version
+SERVER_PORT = 5006
 
-SAMPLE_RATE = 16000
-PACKET_FRAMES = 1024
+SAMPLE_RATE = 48000
+PACKET_FRAMES = 2048
 I2S_BITS = 32
 I2S_FMT = I2S.MONO
 RECONNECT_DELAY = 3
@@ -96,7 +97,7 @@ def run():
         bits=I2S_BITS,
         format=I2S_FMT,
         rate=SAMPLE_RATE,
-        ibuf=40000,
+        ibuf=60000,
     )
 
     print(f"I2S: INMP441 at {SAMPLE_RATE} Hz → {SERVER_IP}:{SERVER_PORT}")

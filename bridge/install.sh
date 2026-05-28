@@ -21,8 +21,14 @@ Install or uninstall the BirdNET mic bridge service.
 Options:
   --user USER       Linux user to run the service as (default: auto-detect)
   --recs-dir PATH   StreamData directory (default: ~USER/BirdSongs/StreamData)
-  --uninstall       Remove the bridge service and files
+  --mode MODE       Client mode: pico, esp32, or both (default: pico)
+  --uninstall       Remove the bridge service(s) and files
   -h, --help        Show this help
+
+Modes:
+  pico    — single bridge on port 5005 @ 16000 Hz (for Pico 2W)
+  esp32   — single bridge on port 5006 @ 48000 Hz (for ESP32-S3)
+  both    — two bridges: port 5005 (Pico) + port 5006 (ESP32)
 EOF
     exit 0
 }
@@ -32,16 +38,23 @@ EOF
 ACTION="install"
 USER_OVERRIDE=""
 RECS_DIR_OVERRIDE=""
+MODE="pico"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --uninstall)  ACTION="uninstall"; shift ;;
         --user)       USER_OVERRIDE="$2"; shift 2 ;;
         --recs-dir)   RECS_DIR_OVERRIDE="$2"; shift 2 ;;
+        --mode)       MODE="$2"; shift 2 ;;
         -h|--help)    usage ;;
         *)            error "Unknown option: $1"; usage ;;
     esac
 done
+
+if [[ "$MODE" != "pico" && "$MODE" != "esp32" && "$MODE" != "both" ]]; then
+    error "--mode must be pico, esp32, or both"
+    exit 1
+fi
 
 # ── Root check ────────────────────────────────────────────
 
@@ -73,23 +86,25 @@ fi
 # ── Uninstall ─────────────────────────────────────────────
 
 if [[ "$ACTION" == "uninstall" ]]; then
-    info "Uninstalling ${SERVICE_NAME}..."
+    info "Uninstalling bridge services..."
 
-    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
-        systemctl stop "$SERVICE_NAME"
-        info "Stopped $SERVICE_NAME"
-    fi
+    for svc in "$SERVICE_NAME" "${SERVICE_NAME}-2"; do
+        svc_file="/etc/systemd/system/${svc}.service"
+        if systemctl is-active --quiet "$svc" 2>/dev/null; then
+            systemctl stop "$svc"
+            info "Stopped $svc"
+        fi
+        if systemctl is-enabled --quiet "$svc" 2>/dev/null; then
+            systemctl disable "$svc"
+            info "Disabled $svc"
+        fi
+        if [[ -f "$svc_file" ]]; then
+            rm -f "$svc_file"
+            info "Removed $svc_file"
+        fi
+    done
 
-    if systemctl is-enabled --quiet "$SERVICE_NAME" 2>/dev/null; then
-        systemctl disable "$SERVICE_NAME"
-        info "Disabled $SERVICE_NAME"
-    fi
-
-    if [[ -f "$SERVICE_FILE" ]]; then
-        rm -f "$SERVICE_FILE"
-        systemctl daemon-reload
-        info "Removed $SERVICE_FILE"
-    fi
+    systemctl daemon-reload
 
     if [[ -d "$INSTALL_DIR" ]]; then
         rm -rf "$INSTALL_DIR"
@@ -107,7 +122,7 @@ fi
 
 # ── Install ───────────────────────────────────────────────
 
-info "Installing ${SERVICE_NAME}..."
+info "Installing ${SERVICE_NAME} (mode: ${MODE})..."
 info "  User:     $SVC_USER"
 info "  Recs dir: $RECS_DIR"
 
@@ -122,10 +137,16 @@ mkdir -p "$RECS_DIR"
 chown "$SVC_USER:$SVC_USER" "$RECS_DIR"
 info "Ensured $RECS_DIR exists"
 
-# Generate systemd service
-cat > "$SERVICE_FILE" <<EOF
+# Generate systemd service(s)
+install_service() {
+    local svc_name="$1"
+    local port="$2"
+    local input_rate="$3"
+    local svc_file="/etc/systemd/system/${svc_name}.service"
+
+    cat > "$svc_file" <<EOF
 [Unit]
-Description=Pico 2W wireless mic bridge for BirdNET-Pi
+Description=Wireless mic bridge for BirdNET-Pi (port ${port}, ${input_rate}Hz)
 After=network-online.target
 Wants=network-online.target
 Before=birdnet_analysis.service
@@ -135,19 +156,29 @@ Type=simple
 User=${SVC_USER}
 ExecStart=/usr/bin/python3 ${INSTALL_DIR}/birdnet_mic_bridge.py
 Environment=RECS_DIR=${RECS_DIR}
+Environment=LISTEN_PORT=${port}
+Environment=INPUT_RATE=${input_rate}
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
-info "Created $SERVICE_FILE"
+    info "Created $svc_file (port $port, ${input_rate}Hz)"
+    systemctl enable "$svc_name"
+    systemctl restart "$svc_name"
+    info "Service $svc_name enabled and started"
+}
 
-# Reload and enable
+if [[ "$MODE" == "pico" || "$MODE" == "both" ]]; then
+    install_service "$SERVICE_NAME" 5005 16000
+fi
+
+if [[ "$MODE" == "esp32" || "$MODE" == "both" ]]; then
+    install_service "${SERVICE_NAME}-2" 5006 48000
+fi
+
 systemctl daemon-reload
-systemctl enable "$SERVICE_NAME"
-systemctl restart "$SERVICE_NAME"
-info "Service enabled and started"
 
 # Mask BirdNET recording service if present
 if systemctl list-unit-files | grep -q birdnet_recording.service; then
@@ -172,8 +203,30 @@ fi
 echo ""
 info "Installation complete!"
 echo ""
-systemctl status "$SERVICE_NAME" --no-pager || true
+info "╔══════════════════════════════════════════════════════╗"
+if [[ "$MODE" == "pico" || "$MODE" == "both" ]]; then
+info "║  Pico 2W:   port 5005  @ 16000 Hz  (32 KB/s)    ║"
+fi
+if [[ "$MODE" == "esp32" || "$MODE" == "both" ]]; then
+info "║  ESP32-S3:  port 5006  @ 48000 Hz  (96 KB/s)    ║"
+fi
+info "╚══════════════════════════════════════════════════════╝"
 echo ""
-info "Logs:   journalctl -u $SERVICE_NAME -f"
-info "Stop:   sudo systemctl stop $SERVICE_NAME"
+info "Set SERVER_PORT in each board's main.py to match."
+echo ""
+if [[ "$MODE" == "pico" || "$MODE" == "both" ]]; then
+    systemctl status "$SERVICE_NAME" --no-pager || true
+    echo ""
+fi
+if [[ "$MODE" == "esp32" || "$MODE" == "both" ]]; then
+    systemctl status "${SERVICE_NAME}-2" --no-pager || true
+    echo ""
+fi
+info "Logs:"
+if [[ "$MODE" == "pico" || "$MODE" == "both" ]]; then
+info "  Pico:  journalctl -u $SERVICE_NAME -f"
+fi
+if [[ "$MODE" == "esp32" || "$MODE" == "both" ]]; then
+info "  ESP32: journalctl -u ${SERVICE_NAME}-2 -f"
+fi
 info "Remove: sudo $0 --uninstall"
