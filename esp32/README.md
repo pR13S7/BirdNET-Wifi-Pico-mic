@@ -82,9 +82,39 @@ Connect via serial (115200 baud) and you should see the MicroPython REPL:
 240000000
 ```
 
-### Upload main.py
+### Upload and run with Thonny
 
-Use **mpremote** (recommended) or Thonny:
+1. Open [Thonny](https://thonny.org)
+2. Go to **Tools → Options → Interpreter**
+3. Select **MicroPython (ESP32)** as the interpreter
+4. Set port to the **COM** USB-C port (the one with the CH343 chip):
+   - macOS: `/dev/cu.wchusbserial*` or `/dev/cu.usbserial*`
+   - Linux: `/dev/ttyUSB0` or `/dev/ttyACM0`
+   - Windows: `COM3` (check Device Manager)
+5. Click **OK** — you should see the `>>>` REPL prompt
+
+**To flash MicroPython firmware via Thonny:**
+
+1. Put board in download mode (hold BOOT → press RESET → release BOOT)
+2. Go to **Tools → Options → Interpreter**
+3. Click **Install or update MicroPython (esptool)**
+4. Select:
+   - Target port: your COM port
+   - MicroPython family: **ESP32-S3**
+   - Variant: **Espressif ESP32-S3 (SPIRAM OCT)**
+5. Click **Install** and wait for it to finish
+6. Press **RESET** on the board
+
+**To upload main.py:**
+
+1. Open `esp32/main.py` in Thonny
+2. Edit `WIFI_SSID`, `WIFI_PASSWORD`, and `SERVER_IP`
+3. **File → Save as → MicroPython device → `main.py`**
+4. Press **RESET** or click the green Run button
+
+The code runs automatically on every boot since it's saved as `main.py` on the device.
+
+### Upload with mpremote (alternative)
 
 ```bash
 pip install mpremote

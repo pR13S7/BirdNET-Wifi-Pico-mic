@@ -1,8 +1,9 @@
+import gc
 import time
 import socket
 import network
-import gc
 from machine import I2S, Pin
+import neopixel
 
 WIFI_SSID = "YOUR_WIFI_SSID"
 WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
@@ -21,10 +22,21 @@ I2S_SCK = 4    # BCLK
 I2S_WS = 5     # LRCLK / WS
 I2S_SD = 6     # DATA / DOUT
 
-led = Pin(48, Pin.OUT)  # onboard RGB LED data pin on most ESP32-S3-N16R8 boards
+# Onboard WS2812 RGB LED on GPIO48 (requires RGB solder bridge on board)
+np = neopixel.NeoPixel(Pin(48), 1)
+
+
+def led_color(r, g, b):
+    np[0] = (r, g, b)
+    np.write()
+
+
+def led_off():
+    led_color(0, 0, 0)
 
 
 def connect_wifi():
+    led_color(0, 0, 20)  # blue = connecting WiFi
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
     wlan.disconnect()
@@ -39,6 +51,7 @@ def connect_wifi():
         time.sleep(1)
 
     if not wlan.isconnected():
+        led_color(20, 0, 0)  # red = WiFi failed
         print("\nWiFi FAILED — rebooting in 5s")
         time.sleep(5)
         import machine
@@ -46,22 +59,23 @@ def connect_wifi():
 
     ip = wlan.ifconfig()[0]
     print(f"\nConnected! IP: {ip}")
-    led.on()
+    led_color(0, 20, 20)  # cyan = WiFi OK, waiting for bridge
     wlan.config(pm=network.WLAN.PM_NONE)
     return wlan, ip
 
 
 def tcp_connect():
+    led_color(20, 20, 0)  # yellow = connecting TCP
     for attempt in range(10):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.connect((SERVER_IP, SERVER_PORT))
             print(f"TCP connected to {SERVER_IP}:{SERVER_PORT}")
-            led.on()
+            led_color(0, 20, 0)  # green = streaming
             return s
         except OSError as e:
             print(f"TCP failed ({e}), retry {attempt+1}/10...")
-            led.off()
+            led_color(20, 5, 0)  # orange = TCP retry
             try:
                 s.close()
             except:
@@ -125,7 +139,8 @@ def run():
                     sent_mb = total_bytes / (1024 * 1024)
                     rssi = wlan.status('rssi') if wlan.isconnected() else 0
                     mem_kb = gc.mem_free() // 1024
-                    print(f"[esp32] {elapsed}s {kbps:.0f}KB/s sent={sent_mb:.1f}MB rssi={rssi} mem={mem_kb}KB")
+                    print(
+                        f"[esp32] {elapsed}s {kbps:.0f}KB/s sent={sent_mb:.1f}MB rssi={rssi} mem={mem_kb}KB")
                     last_log = now
                     gc.collect()
 
@@ -151,9 +166,9 @@ while True:
     except Exception as e:
         crash_count += 1
         print(f"\n*** CRASH #{crash_count}: {type(e).__name__}: {e} ***")
-        led.off()
+        led_color(20, 0, 0)  # red = crash
         time.sleep(3)
     except KeyboardInterrupt:
         print("Stopped by user")
-        led.off()
+        led_off()
         break
