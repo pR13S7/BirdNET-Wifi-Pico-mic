@@ -94,7 +94,7 @@ Five signal connections plus one channel-select tie to ground. No decoupling cap
 
 ### Wiring diagram
 
-![INMP441 to Pico 2W Wiring](pico/wiring_inmp441_pico2w.svg)
+![INMP441 to Pico 2W Wiring](pico2w/wiring_inmp441_pico2w.svg)
 
 ### Pin mapping
 
