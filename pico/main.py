@@ -2,6 +2,7 @@ import time
 import socket
 import network
 import rp2
+import gc
 from machine import I2S, Pin, freq
 
 freq(150_000_000)
@@ -13,6 +14,10 @@ try:
     HAS_LCD = True
 except Exception:
     HAS_LCD = False
+
+btn_a = Pin(15, Pin.IN, Pin.PULL_UP)
+screen_on = True
+btn_prev = True
 
 WIFI_SSID = "YOUR_WIFI_SSID"
 WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
@@ -45,6 +50,7 @@ def extract_left(buf32, buf16, n):
 stat_kbps = [0]
 stat_rssi = [0]
 stat_pkts = [0]
+stat_mem = [0]
 
 
 def fmt_uptime(sec):
@@ -82,6 +88,10 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
     lcd.text(f"Sent: {sent_mb:.1f} MB  {stat_kbps[0]:.0f} KB/s", 4, 104, GREEN)
     lcd.text(f"Pkts: {stat_pkts[0]}  Crash: {crash_count}", 4, 116, CYAN)
 
+    lcd.hline(4, 130, 232, GRAY)
+
+    lcd.text(f"Rate: {SAMPLE_RATE}Hz  Mem: {stat_mem[0]}KB", 4, 138, GRAY)
+
     if msg:
         lcd.hline(4, 220, 232, GRAY)
         lcd.text(msg, 4, 228, ORANGE)
@@ -90,7 +100,7 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
 
 
 def update_display(wifi_ip, bridge, uptime_s, sent_mb, msg=None):
-    if not HAS_LCD:
+    if not HAS_LCD or not screen_on:
         return
     draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg)
 
@@ -156,6 +166,7 @@ def tcp_connect(wifi_ip):
 
 
 def run():
+    global screen_on, btn_prev
     wlan, wifi_ip = connect_wifi()
 
     audio_in = I2S(
@@ -198,16 +209,29 @@ def run():
                 total_bytes += j
 
                 now = time.ticks_ms()
+
+                btn_val = btn_a.value()
+                if not btn_val and btn_prev:
+                    screen_on = not screen_on
+                    if HAS_LCD:
+                        lcd.backlight(screen_on)
+                        if screen_on:
+                            elapsed = time.ticks_diff(now, start) // 1000
+                            sent_mb = total_bytes / (1024 * 1024)
+                            update_display(wifi_ip, True, elapsed, sent_mb)
+                btn_prev = btn_val
+
                 if time.ticks_diff(now, last_log) > 60_000:
                     elapsed = time.ticks_diff(now, start) // 1000
                     sent_mb = total_bytes / (1024 * 1024)
                     stat_kbps[0] = total_bytes / 1024 / max(elapsed, 1)
                     stat_pkts[0] = total_bytes // (PACKET_FRAMES * 2)
+                    stat_mem[0] = gc.mem_free() // 1024
                     try:
                         stat_rssi[0] = wlan.status('rssi')
                     except:
                         pass
-                    print(f"[pico] {elapsed}s {stat_kbps[0]:.0f}KB/s sent={sent_mb:.1f}MB")
+                    print(f"[pico] {elapsed}s {stat_kbps[0]:.0f}KB/s sent={sent_mb:.1f}MB rssi={stat_rssi[0]}")
                     update_display(wifi_ip, True, elapsed, sent_mb)
                     last_log = now
 
