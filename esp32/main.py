@@ -18,6 +18,11 @@ I2S_BITS = 32
 I2S_FMT = I2S.MONO
 RECONNECT_DELAY = 3
 
+NOISE_GATE_THRESHOLD = 50
+HP_ALPHA_NUM = 253
+HP_ALPHA_DEN = 256
+SLEW_LIMIT = 3000
+
 # ESP32-S3 I2S pins (any GPIO works, no WS=SCK+1 constraint)
 I2S_SCK = 4    # BCLK
 I2S_WS = 5     # LRCLK / WS
@@ -105,6 +110,11 @@ def run():
     buf = bytearray(PACKET_FRAMES * 4)  # 32-bit mono = 4 bytes/frame
     out = bytearray(PACKET_FRAMES * 2)  # 16-bit output = 2 bytes/frame
     out_mv = memoryview(out)
+    silence = bytearray(PACKET_FRAMES * 2)
+
+    hp_prev_x = 0
+    hp_prev_y = 0
+    slew_prev = 0
 
     while True:
         sock = tcp_connect()
@@ -120,11 +130,42 @@ def run():
                     continue
 
                 frames = num_read // 4
-                for i in range(frames):
-                    out[i * 2] = buf[i * 4 + 2]
-                    out[i * 2 + 1] = buf[i * 4 + 3]
+                peak = 0
 
-                to_send = out_mv[:frames * 2]
+                for i in range(frames):
+                    raw = (buf[i * 4 + 2] | (buf[i * 4 + 3] << 8))
+                    if raw >= 32768:
+                        raw -= 65536
+
+                    y = raw - hp_prev_x + (HP_ALPHA_NUM * hp_prev_y) // HP_ALPHA_DEN
+                    hp_prev_x = raw
+                    hp_prev_y = y
+
+                    if y > 32767:
+                        y = 32767
+                    elif y < -32768:
+                        y = -32768
+
+                    delta = y - slew_prev
+                    if delta > SLEW_LIMIT:
+                        y = slew_prev + SLEW_LIMIT
+                    elif delta < -SLEW_LIMIT:
+                        y = slew_prev - SLEW_LIMIT
+                    slew_prev = y
+
+                    amp = y if y >= 0 else -y
+                    if amp > peak:
+                        peak = amp
+
+                    val = y & 0xFFFF
+                    out[i * 2] = val & 0xFF
+                    out[i * 2 + 1] = (val >> 8) & 0xFF
+
+                if peak < NOISE_GATE_THRESHOLD:
+                    to_send = memoryview(silence)[:frames * 2]
+                else:
+                    to_send = out_mv[:frames * 2]
+
                 sent = 0
                 while sent < len(to_send):
                     n = sock.send(to_send[sent:])
