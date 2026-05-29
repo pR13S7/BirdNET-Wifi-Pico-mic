@@ -158,6 +158,17 @@ If you already have a Pico 2W, it works fine with the right router settings (see
 
 > **Important:** The L/R pin **must** be connected to GND (not left floating). A floating L/R pin causes the mic to produce no audio output.
 
+### WiFi noise mitigation (software)
+
+The ESP32's WiFi radio can inject impulsive noise (clicks) into the I2S data path. The firmware includes two software countermeasures:
+
+- **Slew-rate limiter** — caps maximum sample-to-sample change to ±3000, suppressing single-sample spikes from WiFi TX bursts
+- **DC-blocking high-pass filter** — removes sub-38 Hz rumble and DC offset
+
+The bridge additionally runs ffmpeg's `adeclick` filter to catch any remaining impulses.
+
+> **Note:** A decoupling capacitor across INMP441 VDD/GND is often recommended, but on breakout boards with long leads it can create LC oscillation and make noise worse. Only add one if you can solder an SMD cap directly at the INMP441 IC pads.
+
 ---
 
 ## 6. Wiring: INMP441 to Pico 2W

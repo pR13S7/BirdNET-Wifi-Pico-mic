@@ -2,6 +2,8 @@ import gc
 import time
 import socket
 import network
+import micropython
+from array import array
 from machine import I2S, Pin
 import neopixel
 
@@ -14,14 +16,53 @@ SERVER_PORT = 5006
 
 SAMPLE_RATE = 48000
 PACKET_FRAMES = 2048
+WIFI_TX_POWER = 8
 I2S_BITS = 32
 I2S_FMT = I2S.MONO
 RECONNECT_DELAY = 3
 
 NOISE_GATE_THRESHOLD = 50
-HP_ALPHA_NUM = 253
-HP_ALPHA_DEN = 256
 SLEW_LIMIT = 3000
+
+state = array('i', [0, 0, 0])  # [hp_prev_x, hp_prev_y, slew_prev]
+
+
+@micropython.viper
+def process_audio(buf_in, buf_out, frames: int, st) -> int:
+    inp = ptr8(buf_in)
+    out = ptr8(buf_out)
+    s = ptr32(st)
+    hp_px = s[0]
+    hp_py = s[1]
+    sl_prev = s[2]
+    peak = 0
+    for i in range(frames):
+        raw = int(inp[i * 4 + 2]) | (int(inp[i * 4 + 3]) << 8)
+        if raw >= 32768:
+            raw -= 65536
+        y = raw - hp_px + (253 * hp_py) // 256
+        hp_px = raw
+        hp_py = y
+        if y > 32767:
+            y = 32767
+        elif y < -32768:
+            y = -32768
+        delta = y - sl_prev
+        if delta > 3000:
+            y = sl_prev + 3000
+        elif delta < -3000:
+            y = sl_prev - 3000
+        sl_prev = y
+        amp = y if y >= 0 else -y
+        if amp > peak:
+            peak = amp
+        val = y & 0xFFFF
+        out[i * 2] = val & 0xFF
+        out[i * 2 + 1] = (val >> 8) & 0xFF
+    s[0] = hp_px
+    s[1] = hp_py
+    s[2] = sl_prev
+    return peak
 
 # ESP32-S3 I2S pins (any GPIO works, no WS=SCK+1 constraint)
 I2S_SCK = 4    # BCLK
@@ -67,6 +108,7 @@ def connect_wifi():
     print(f"\nConnected! IP: {ip}")
     led_color(0, 20, 20)  # cyan = WiFi OK, waiting for bridge
     wlan.config(pm=network.WLAN.PM_NONE)
+    wlan.config(txpower=WIFI_TX_POWER)
     return wlan, ip
 
 
@@ -112,9 +154,9 @@ def run():
     out_mv = memoryview(out)
     silence = bytearray(PACKET_FRAMES * 2)
 
-    hp_prev_x = 0
-    hp_prev_y = 0
-    slew_prev = 0
+    state[0] = 0
+    state[1] = 0
+    state[2] = 0
 
     while True:
         sock = tcp_connect()
@@ -130,36 +172,7 @@ def run():
                     continue
 
                 frames = num_read // 4
-                peak = 0
-
-                for i in range(frames):
-                    raw = (buf[i * 4 + 2] | (buf[i * 4 + 3] << 8))
-                    if raw >= 32768:
-                        raw -= 65536
-
-                    y = raw - hp_prev_x + (HP_ALPHA_NUM * hp_prev_y) // HP_ALPHA_DEN
-                    hp_prev_x = raw
-                    hp_prev_y = y
-
-                    if y > 32767:
-                        y = 32767
-                    elif y < -32768:
-                        y = -32768
-
-                    delta = y - slew_prev
-                    if delta > SLEW_LIMIT:
-                        y = slew_prev + SLEW_LIMIT
-                    elif delta < -SLEW_LIMIT:
-                        y = slew_prev - SLEW_LIMIT
-                    slew_prev = y
-
-                    amp = y if y >= 0 else -y
-                    if amp > peak:
-                        peak = amp
-
-                    val = y & 0xFFFF
-                    out[i * 2] = val & 0xFF
-                    out[i * 2 + 1] = (val >> 8) & 0xFF
+                peak = process_audio(buf, out, frames, state)
 
                 if peak < NOISE_GATE_THRESHOLD:
                     to_send = memoryview(silence)[:frames * 2]
