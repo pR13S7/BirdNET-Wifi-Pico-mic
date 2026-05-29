@@ -2,16 +2,15 @@
 """
 TCP → WAV bridge for BirdNET-Pi.
 
-Accepts a TCP connection from a Pico 2W streaming raw s16le PCM at 22050 Hz
-(from INMP441 I2S digital mic), pipes it through ffmpeg for filtering and
-resampling, and writes 15-second WAV files directly to BirdNET-Pi's
-StreamData folder.
+Accepts a TCP connection streaming raw s16le PCM (from INMP441 I2S mic),
+pipes it through ffmpeg for filtering and resampling, and writes 15-second
+WAV files directly to BirdNET-Pi's StreamData folder.
 
-Install:
-    sudo cp birdnet_mic_bridge.py /opt/mic_bridge/birdnet_mic_bridge.py
-    sudo cp ../bridge/birdnet-mic-bridge.service /etc/systemd/system/
-    sudo systemctl daemon-reload
-    sudo systemctl enable --now birdnet-mic-bridge.service
+Supports multiple clients on separate ports via INPUT_RATE env var:
+  - Pico 2W:   port 5005, INPUT_RATE=16000
+  - ESP32-S3:  port 5006, INPUT_RATE=48000
+
+Install: sudo ./install.sh --mode both
 """
 
 import socket
@@ -79,7 +78,7 @@ def main():
 
     print(f"[bridge] Listening on :{LISTEN_PORT}")
     print(f"[bridge] Writing {SEGMENT_SEC}s WAV files to {RECS_DIR}")
-    print(f"[bridge] Filters: HP 200Hz, LP 10kHz (I2S — no volume boost needed)")
+    print(f"[bridge] Input: {INPUT_RATE} Hz s16le mono → {OUTPUT_RATE} Hz WAV")
     print(f"[bridge] Socket timeout: {CONN_TIMEOUT_SEC}s")
     print(f"[bridge] Progress log interval: {PROGRESS_LOG_MB:.1f} MB")
     print(f"[bridge] No ALSA loopback needed for recording!")
