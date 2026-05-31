@@ -142,6 +142,7 @@ install_service() {
     local svc_name="$1"
     local port="$2"
     local input_rate="$3"
+    local source_tag="$4"
     local svc_file="/etc/systemd/system/${svc_name}.service"
 
     cat > "$svc_file" <<EOF
@@ -158,24 +159,25 @@ ExecStart=/usr/bin/python3 ${INSTALL_DIR}/birdnet_mic_bridge.py
 Environment=RECS_DIR=${RECS_DIR}
 Environment=LISTEN_PORT=${port}
 Environment=INPUT_RATE=${input_rate}
+Environment=SOURCE_TAG=${source_tag}
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    info "Created $svc_file (port $port, ${input_rate}Hz)"
+    info "Created $svc_file (port $port, ${input_rate}Hz, tag=${source_tag})"
     systemctl enable "$svc_name"
     systemctl restart "$svc_name"
     info "Service $svc_name enabled and started"
 }
 
 if [[ "$MODE" == "pico" || "$MODE" == "both" ]]; then
-    install_service "$SERVICE_NAME" 5005 16000
+    install_service "$SERVICE_NAME" 5005 16000 "pico"
 fi
 
 if [[ "$MODE" == "esp32" || "$MODE" == "both" ]]; then
-    install_service "${SERVICE_NAME}-2" 5006 48000
+    install_service "${SERVICE_NAME}-2" 5006 48000 "esp32"
 fi
 
 systemctl daemon-reload

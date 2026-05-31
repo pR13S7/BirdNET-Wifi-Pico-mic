@@ -19,6 +19,7 @@ import sys
 import signal
 import os
 import time
+import threading
 
 LISTEN_IP = "0.0.0.0"
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "5005"))
@@ -32,6 +33,9 @@ CHANNELS = 1
 SEGMENT_SEC = 15
 
 RECS_DIR = os.environ.get("RECS_DIR", "/home/pr13s7/BirdSongs/StreamData")
+SOURCE_TAG = os.environ.get("SOURCE_TAG", "")
+
+STAGING_DIR = os.path.join(RECS_DIR, ".staging" + (f"-{SOURCE_TAG}" if SOURCE_TAG else ""))
 
 running = True
 
@@ -46,7 +50,52 @@ signal.signal(signal.SIGTERM, shutdown)
 signal.signal(signal.SIGINT, shutdown)
 
 
+def mover_thread():
+    """Move completed segments from staging to RECS_DIR atomically.
+
+    A segment is considered complete once a newer file appears in staging
+    (ffmpeg only creates the next file after closing the previous one).
+    Atomic rename produces a single IN_MOVED_TO inotify event, preventing
+    BirdNET's analysis from double-queuing the file.
+    """
+    while running:
+        try:
+            files = sorted(
+                (f for f in os.listdir(STAGING_DIR) if f.endswith(".wav")),
+                key=lambda f: os.path.getmtime(os.path.join(STAGING_DIR, f))
+            )
+        except OSError:
+            time.sleep(0.5)
+            continue
+
+        if len(files) >= 2:
+            for f in files[:-1]:
+                src = os.path.join(STAGING_DIR, f)
+                dst = os.path.join(RECS_DIR, f)
+                try:
+                    os.rename(src, dst)
+                except OSError:
+                    pass
+        time.sleep(0.5)
+
+
+def flush_staging():
+    """Move any remaining file in staging (called after ffmpeg exits)."""
+    try:
+        for f in os.listdir(STAGING_DIR):
+            if f.endswith(".wav"):
+                src = os.path.join(STAGING_DIR, f)
+                dst = os.path.join(RECS_DIR, f)
+                try:
+                    os.rename(src, dst)
+                except OSError:
+                    pass
+    except OSError:
+        pass
+
+
 def start_ffmpeg():
+    prefix = f"{SOURCE_TAG}-" if SOURCE_TAG else ""
     return subprocess.Popen(
         [
             "ffmpeg",
@@ -62,7 +111,7 @@ def start_ffmpeg():
             "-segment_time", str(SEGMENT_SEC),
             "-segment_format", "wav",
             "-strftime", "1",
-            os.path.join(RECS_DIR, "%Y-%m-%d-birdnet-%H:%M:%S.wav")
+            os.path.join(STAGING_DIR, prefix + "%Y-%m-%d-birdnet-%H:%M:%S.wav")
         ],
         stdin=subprocess.PIPE
     )
@@ -70,6 +119,10 @@ def start_ffmpeg():
 
 def main():
     os.makedirs(RECS_DIR, exist_ok=True)
+    os.makedirs(STAGING_DIR, exist_ok=True)
+
+    mover = threading.Thread(target=mover_thread, daemon=True)
+    mover.start()
 
     srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -78,9 +131,10 @@ def main():
 
     print(f"[bridge] Listening on :{LISTEN_PORT}")
     print(f"[bridge] Writing {SEGMENT_SEC}s WAV files to {RECS_DIR}")
+    print(f"[bridge] Staging via {STAGING_DIR} (atomic move)")
     print(f"[bridge] Input: {INPUT_RATE} Hz s16le mono → {OUTPUT_RATE} Hz WAV")
     print(f"[bridge] Socket timeout: {CONN_TIMEOUT_SEC}s")
-    print(f"[bridge] Progress log interval: {PROGRESS_LOG_MB:.1f} MB")
+    print(f"[bridge] Source tag: {SOURCE_TAG or '(none)'}")
     print(f"[bridge] No ALSA loopback needed for recording!")
 
     while running:
@@ -132,7 +186,8 @@ def main():
             except:
                 pass
             proc.wait()
-            print("[bridge] Pico disconnected, restarting on next connect", flush=True)
+            flush_staging()
+            print("[bridge] Client disconnected, restarting on next connect", flush=True)
 
 
 if __name__ == "__main__":
