@@ -95,7 +95,6 @@ def flush_staging():
 
 
 def start_ffmpeg():
-    prefix = f"{SOURCE_TAG}-" if SOURCE_TAG else ""
     return subprocess.Popen(
         [
             "ffmpeg",
@@ -111,7 +110,7 @@ def start_ffmpeg():
             "-segment_time", str(SEGMENT_SEC),
             "-segment_format", "wav",
             "-strftime", "1",
-            os.path.join(STAGING_DIR, prefix + "%Y-%m-%d-birdnet-%H:%M:%S.wav")
+            os.path.join(STAGING_DIR, "%Y-%m-%d-birdnet-%H:%M:%S.wav")
         ],
         stdin=subprocess.PIPE
     )
