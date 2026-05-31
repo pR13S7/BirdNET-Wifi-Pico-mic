@@ -18,6 +18,7 @@ import subprocess
 import sys
 import signal
 import os
+import shutil
 import time
 import threading
 
@@ -51,12 +52,14 @@ signal.signal(signal.SIGINT, shutdown)
 
 
 def mover_thread():
-    """Move completed segments from staging to RECS_DIR atomically.
+    """Copy completed segments from staging to RECS_DIR.
 
     A segment is considered complete once a newer file appears in staging
     (ffmpeg only creates the next file after closing the previous one).
-    Atomic rename produces a single IN_MOVED_TO inotify event, preventing
-    BirdNET's analysis from double-queuing the file.
+    We use copy+unlink instead of rename because BirdNET-Pi's inotify
+    watcher only responds to IN_CREATE/IN_CLOSE_WRITE, not IN_MOVED_TO.
+    Copying a finished 1.4MB file takes <50ms so the event race window
+    is negligible compared to the original 15s streaming write.
     """
     while running:
         try:
@@ -73,21 +76,23 @@ def mover_thread():
                 src = os.path.join(STAGING_DIR, f)
                 dst = os.path.join(RECS_DIR, f)
                 try:
-                    os.rename(src, dst)
+                    shutil.copy2(src, dst)
+                    os.unlink(src)
                 except OSError:
                     pass
         time.sleep(0.5)
 
 
 def flush_staging():
-    """Move any remaining file in staging (called after ffmpeg exits)."""
+    """Copy any remaining file in staging (called after ffmpeg exits)."""
     try:
         for f in os.listdir(STAGING_DIR):
             if f.endswith(".wav"):
                 src = os.path.join(STAGING_DIR, f)
                 dst = os.path.join(RECS_DIR, f)
                 try:
-                    os.rename(src, dst)
+                    shutil.copy2(src, dst)
+                    os.unlink(src)
                 except OSError:
                     pass
     except OSError:
