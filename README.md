@@ -194,6 +194,22 @@ Five signal connections plus one channel-select tie to ground. No decoupling cap
 
 > **Tip:** The INMP441's sound port (tiny hole) is on the **bottom** of the module. When mounting, ensure nothing covers the underside.
 
+### WiFi noise mitigation (software)
+
+The Pico 2W's CYW43439 WiFi chip communicates over SPI, injecting **multi-sample** noise bursts into the I2S data path (unlike the ESP32's single-sample spikes). The firmware uses a different strategy:
+
+- **Spike detection + blanking window** — when a sample-to-sample delta exceeds ±1500, the output holds the last known good value for 8 consecutive samples (~0.5ms), covering the full SPI transaction burst
+- **DC-blocking high-pass filter** — removes sub-38 Hz rumble and DC offset
+- **Reduced TX power** (8 dBm) — less radiated energy = smaller SPI bursts
+
+The bridge additionally runs ffmpeg's `adeclick` filter as a second layer.
+
+| Interference type | ESP32-S3 | Pico 2W |
+|-------------------|----------|---------|
+| Source | On-die RF coupling | SPI bus to CYW43439 |
+| Pattern | Single-sample spikes | Multi-sample bursts |
+| Fix | Slew-rate clamp (±3000) | Blanking window (8 samples) |
+
 ---
 
 ## 7. ESP32-S3 firmware

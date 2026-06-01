@@ -1,8 +1,10 @@
+import gc
+from array import array
 import time
 import socket
 import network
 import rp2
-import gc
+import micropython
 from machine import I2S, Pin, freq
 
 freq(150_000_000)
@@ -31,6 +33,9 @@ I2S_BITS = 32
 I2S_FMT = I2S.STEREO
 RECONNECT_DELAY = 3
 
+NOISE_GATE_THRESHOLD = 50
+SLEW_LIMIT = 3000
+
 I2S_SCK = 16
 I2S_WS = 17
 I2S_SD = 18
@@ -38,13 +43,53 @@ I2S_SD = 18
 led = Pin("LED", Pin.OUT)
 
 
-@micropython.native
-def extract_left(buf32, buf16, n):
+dsp_state = array('i', [0, 0, 0, 0])  # [hp_prev_x, hp_prev_y, last_good, blank_count]
+
+
+@micropython.viper
+def process_audio(buf_in, buf_out, n: int, st) -> int:
+    inp = ptr8(buf_in)
+    out = ptr8(buf_out)
+    s = ptr32(st)
+    hp_px = s[0]
+    hp_py = s[1]
+    last_good = s[2]
+    blank = s[3]
+    peak = 0
     j = 0
-    for i in range(0, n, 8):
-        buf16[j] = buf32[i + 2]
-        buf16[j + 1] = buf32[i + 3]
+    i = 0
+    while i < n:
+        raw = int(inp[i + 2]) | (int(inp[i + 3]) << 8)
+        if raw >= 32768:
+            raw -= 65536
+        y = raw - hp_px + (253 * hp_py) // 256
+        hp_px = raw
+        hp_py = y
+        if y > 32767:
+            y = 32767
+        elif y < -32768:
+            y = -32768
+        delta = y - last_good
+        if delta > 1500 or delta < -1500:
+            blank = 8
+        if blank > 0:
+            y = last_good
+            blank -= 1
+        else:
+            last_good = y
+        amp = y if y >= 0 else -y
+        if amp > peak:
+            peak = amp
+        val = y & 0xFFFF
+        out[j] = val & 0xFF
+        out[j + 1] = (val >> 8) & 0xFF
         j += 2
+        i += 8
+    s[0] = hp_px
+    s[1] = hp_py
+    s[2] = last_good
+    s[3] = blank
+    return peak
 
 
 stat_kbps = [0]
@@ -139,6 +184,7 @@ def connect_wifi():
     print(f"\nConnected! IP: {ip}")
     led.on()
     wlan.config(pm=0xa11140)
+    wlan.config(txpower=8)
     if HAS_LCD:
         draw_info(ip, False, 0, 0, "WiFi OK")
     return wlan, ip
@@ -186,6 +232,11 @@ def run():
     buf = bytearray(PACKET_FRAMES * 8)
     out = bytearray(PACKET_FRAMES * 2)
     out_mv = memoryview(out)
+    silence = bytearray(PACKET_FRAMES * 2)
+
+    dsp_state[0] = 0
+    dsp_state[1] = 0
+    dsp_state[2] = 0
 
     while True:
         sock = tcp_connect(wifi_ip)
@@ -202,10 +253,13 @@ def run():
                 if num_read == 0:
                     continue
 
-                extract_left(buf, out, num_read)
+                peak = process_audio(buf, out, num_read, dsp_state)
                 j = num_read // 4
 
-                sock.send(out_mv[:j])
+                if peak < NOISE_GATE_THRESHOLD:
+                    sock.send(memoryview(silence)[:j])
+                else:
+                    sock.send(out_mv[:j])
                 total_bytes += j
 
                 now = time.ticks_ms()
