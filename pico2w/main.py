@@ -33,7 +33,7 @@ I2S_BITS = 32
 I2S_FMT = I2S.STEREO
 RECONNECT_DELAY = 3
 
-NOISE_GATE_THRESHOLD = 50
+NOISE_GATE_THRESHOLD = 0
 SLEW_LIMIT = 3000
 
 I2S_SCK = 16
@@ -70,8 +70,8 @@ def process_audio(buf_in, buf_out, n: int, st) -> int:
         elif y < -32768:
             y = -32768
         delta = y - last_good
-        if delta > 1500 or delta < -1500:
-            blank = 8
+        if delta > 12000 or delta < -12000:
+            blank = 2
         if blank > 0:
             y = last_good
             blank -= 1
@@ -256,10 +256,16 @@ def run():
                 peak = process_audio(buf, out, num_read, dsp_state)
                 j = num_read // 4
 
-                if peak < NOISE_GATE_THRESHOLD:
-                    sock.send(memoryview(silence)[:j])
+                if NOISE_GATE_THRESHOLD > 0 and peak < NOISE_GATE_THRESHOLD:
+                    to_send = memoryview(silence)[:j]
                 else:
-                    sock.send(out_mv[:j])
+                    to_send = out_mv[:j]
+                sent = 0
+                while sent < j:
+                    n = sock.send(to_send[sent:j])
+                    if n == 0:
+                        raise OSError("send returned 0")
+                    sent += n
                 total_bytes += j
 
                 now = time.ticks_ms()
