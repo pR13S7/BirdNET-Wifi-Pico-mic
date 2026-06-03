@@ -6,3 +6,4 @@ pico/main.working.py
 .cursor
 pico/__pycache__
 esp32/test_mic.sh
+pico2w/__pycache__

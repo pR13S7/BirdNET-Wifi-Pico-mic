@@ -62,7 +62,7 @@ def process_audio(buf_in, buf_out, n: int, st) -> int:
         raw = int(inp[i + 2]) | (int(inp[i + 3]) << 8)
         if raw >= 32768:
             raw -= 65536
-        y = raw - hp_px + (253 * hp_py) // 256
+        y = raw - hp_px + (241 * hp_py) // 256
         hp_px = raw
         hp_py = y
         if y > 32767:
