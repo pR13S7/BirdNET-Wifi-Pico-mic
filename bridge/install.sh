@@ -19,11 +19,15 @@ Usage: sudo $0 [OPTIONS]
 Install or uninstall the BirdNET mic bridge service.
 
 Options:
-  --user USER       Linux user to run the service as (default: auto-detect)
-  --recs-dir PATH   StreamData directory (default: ~USER/BirdSongs/StreamData)
-  --mode MODE       Client mode: pico, esp32, or both (default: pico)
-  --uninstall       Remove the bridge service(s) and files
-  -h, --help        Show this help
+  --user USER         Linux user to run the service as (default: auto-detect)
+  --recs-dir PATH     StreamData directory (default: ~USER/BirdSongs/StreamData)
+  --mode MODE         Client mode: pico, esp32, or both (default: pico)
+  --notch-pico HZ     Notch-filter the Pico stream at HZ to remove the INMP441
+                      idle tone (recommended: 3575; 0 = off, default)
+  --notch-esp32 HZ    Notch-filter the ESP32 stream at HZ (recommended: 3575;
+                      0 = off, default)
+  --uninstall         Remove the bridge service(s) and files
+  -h, --help          Show this help
 
 Modes:
   pico    — single bridge on port 5005 @ 16000 Hz (for Pico 2W)
@@ -39,15 +43,19 @@ ACTION="install"
 USER_OVERRIDE=""
 RECS_DIR_OVERRIDE=""
 MODE="pico"
+NOTCH_PICO="0"
+NOTCH_ESP32="0"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --uninstall)  ACTION="uninstall"; shift ;;
-        --user)       USER_OVERRIDE="$2"; shift 2 ;;
-        --recs-dir)   RECS_DIR_OVERRIDE="$2"; shift 2 ;;
-        --mode)       MODE="$2"; shift 2 ;;
-        -h|--help)    usage ;;
-        *)            error "Unknown option: $1"; usage ;;
+        --uninstall)    ACTION="uninstall"; shift ;;
+        --user)         USER_OVERRIDE="$2"; shift 2 ;;
+        --recs-dir)     RECS_DIR_OVERRIDE="$2"; shift 2 ;;
+        --mode)         MODE="$2"; shift 2 ;;
+        --notch-pico)   NOTCH_PICO="$2"; shift 2 ;;
+        --notch-esp32)  NOTCH_ESP32="$2"; shift 2 ;;
+        -h|--help)      usage ;;
+        *)              error "Unknown option: $1"; usage ;;
     esac
 done
 
@@ -143,6 +151,7 @@ install_service() {
     local port="$2"
     local input_rate="$3"
     local source_tag="$4"
+    local notch_hz="${5:-0}"
     local svc_file="/etc/systemd/system/${svc_name}.service"
 
     cat > "$svc_file" <<EOF
@@ -160,24 +169,25 @@ Environment=RECS_DIR=${RECS_DIR}
 Environment=LISTEN_PORT=${port}
 Environment=INPUT_RATE=${input_rate}
 Environment=SOURCE_TAG=${source_tag}
+Environment=NOTCH_HZ=${notch_hz}
 Restart=always
 RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
-    info "Created $svc_file (port $port, ${input_rate}Hz, tag=${source_tag})"
+    info "Created $svc_file (port $port, ${input_rate}Hz, tag=${source_tag}, notch=${notch_hz}Hz)"
     systemctl enable "$svc_name"
     systemctl restart "$svc_name"
     info "Service $svc_name enabled and started"
 }
 
 if [[ "$MODE" == "pico" || "$MODE" == "both" ]]; then
-    install_service "$SERVICE_NAME" 5005 16000 "pico"
+    install_service "$SERVICE_NAME" 5005 16000 "pico" "$NOTCH_PICO"
 fi
 
 if [[ "$MODE" == "esp32" || "$MODE" == "both" ]]; then
-    install_service "${SERVICE_NAME}-2" 5006 48000 "esp32"
+    install_service "${SERVICE_NAME}-2" 5006 48000 "esp32" "$NOTCH_ESP32"
 fi
 
 systemctl daemon-reload

@@ -33,6 +33,13 @@ OUTPUT_RATE = 48000
 CHANNELS = 1
 SEGMENT_SEC = 15
 
+# Optional narrow notch to remove the INMP441 sigma-delta idle tone.
+# Measured (FFT of raw streams): Pico ~3547 Hz, ESP32 ~3600 Hz cluster.
+# A shared center of 3575 Hz with a 180 Hz width covers both rigs.
+# NOTCH_HZ=0 disables it. NOTCH_W is the notch width in Hz (ffmpeg width_type=h).
+NOTCH_HZ = float(os.environ.get("NOTCH_HZ", "0"))
+NOTCH_W = float(os.environ.get("NOTCH_W", "180"))
+
 RECS_DIR = os.environ.get("RECS_DIR", "/home/pr13s7/BirdSongs/StreamData")
 SOURCE_TAG = os.environ.get("SOURCE_TAG", "")
 
@@ -99,6 +106,13 @@ def flush_staging():
         pass
 
 
+def build_af_chain():
+    chain = "adeclick=w=10:o=75,highpass=f=200:poles=2"
+    if NOTCH_HZ > 0:
+        chain += f",bandreject=f={NOTCH_HZ:g}:t=h:w={NOTCH_W:g}"
+    return chain
+
+
 def start_ffmpeg():
     return subprocess.Popen(
         [
@@ -108,7 +122,7 @@ def start_ffmpeg():
             "-ar", str(INPUT_RATE),
             "-ac", str(CHANNELS),
             "-i", "pipe:0",
-            "-af", "adeclick=w=10:o=75,highpass=f=200:poles=2",
+            "-af", build_af_chain(),
             "-ar", str(OUTPUT_RATE),
             "-ac", str(CHANNELS),
             "-f", "segment",
@@ -137,6 +151,11 @@ def main():
     print(f"[bridge] Writing {SEGMENT_SEC}s WAV files to {RECS_DIR}")
     print(f"[bridge] Staging via {STAGING_DIR} (atomic move)")
     print(f"[bridge] Input: {INPUT_RATE} Hz s16le mono → {OUTPUT_RATE} Hz WAV")
+    if NOTCH_HZ > 0:
+        print(f"[bridge] Notch: {NOTCH_HZ:g} Hz, width {NOTCH_W:g} Hz")
+    else:
+        print(f"[bridge] Notch: disabled")
+    print(f"[bridge] Filter chain: {build_af_chain()}")
     print(f"[bridge] Socket timeout: {CONN_TIMEOUT_SEC}s")
     print(f"[bridge] Source tag: {SOURCE_TAG or '(none)'}")
     print(f"[bridge] No ALSA loopback needed for recording!")
