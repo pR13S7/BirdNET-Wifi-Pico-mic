@@ -35,6 +35,8 @@ RECONNECT_DELAY = 3
 
 NOISE_GATE_THRESHOLD = 0
 SLEW_LIMIT = 3000
+USE_DSP = True
+I2S_SLOT = 2  # 0=left, 1=right, 2=auto
 
 I2S_SCK = 16
 I2S_WS = 17
@@ -46,8 +48,52 @@ led = Pin("LED", Pin.OUT)
 dsp_state = array('i', [0, 0, 0, 0])  # [hp_prev_x, hp_prev_y, last_good, blank_count]
 
 
+@micropython.native
+def detect_slot(buf32, n, prev_slot):
+    left_peak = 0
+    right_peak = 0
+    scan_n = n
+    if scan_n > 1024:
+        scan_n = 1024
+    for i in range(0, scan_n, 8):
+        l = buf32[i + 2] | (buf32[i + 3] << 8)
+        if l >= 32768:
+            l -= 65536
+        if l < 0:
+            l = -l
+        if l > left_peak:
+            left_peak = l
+
+        r = buf32[i + 6] | (buf32[i + 7] << 8)
+        if r >= 32768:
+            r -= 65536
+        if r < 0:
+            r = -r
+        if r > right_peak:
+            right_peak = r
+
+    # Switch only when one side is clearly stronger to avoid flapping.
+    if right_peak > left_peak + (left_peak // 2):
+        return 1, left_peak, right_peak
+    if left_peak > right_peak + (right_peak // 2):
+        return 0, left_peak, right_peak
+    return prev_slot, left_peak, right_peak
+
+
+@micropython.native
+def extract_slot(buf32, buf16, n, slot):
+    off = 2
+    if slot:
+        off = 6
+    j = 0
+    for i in range(0, n, 8):
+        buf16[j] = buf32[i + off]
+        buf16[j + 1] = buf32[i + off + 1]
+        j += 2
+
+
 @micropython.viper
-def process_audio(buf_in, buf_out, n: int, st) -> int:
+def process_audio(buf_in, buf_out, n: int, st, slot_off: int) -> int:
     inp = ptr8(buf_in)
     out = ptr8(buf_out)
     s = ptr32(st)
@@ -59,7 +105,7 @@ def process_audio(buf_in, buf_out, n: int, st) -> int:
     j = 0
     i = 0
     while i < n:
-        raw = int(inp[i + 2]) | (int(inp[i + 3]) << 8)
+        raw = int(inp[i + slot_off]) | (int(inp[i + slot_off + 1]) << 8)
         if raw >= 32768:
             raw -= 65536
         y = raw - hp_px + (241 * hp_py) // 256
@@ -237,6 +283,9 @@ def run():
     dsp_state[0] = 0
     dsp_state[1] = 0
     dsp_state[2] = 0
+    slot_sel = 0
+    slot_lpk = 0
+    slot_rpk = 0
 
     while True:
         sock = tcp_connect(wifi_ip)
@@ -253,12 +302,21 @@ def run():
                 if num_read == 0:
                     continue
 
-                peak = process_audio(buf, out, num_read, dsp_state)
                 j = num_read // 4
-
-                if NOISE_GATE_THRESHOLD > 0 and peak < NOISE_GATE_THRESHOLD:
-                    to_send = memoryview(silence)[:j]
+                if I2S_SLOT == 2:
+                    slot_sel, slot_lpk, slot_rpk = detect_slot(buf, num_read, slot_sel)
                 else:
+                    slot_sel = 1 if I2S_SLOT else 0
+                slot_off = 6 if slot_sel else 2
+
+                if USE_DSP:
+                    peak = process_audio(buf, out, num_read, dsp_state, slot_off)
+                    if NOISE_GATE_THRESHOLD > 0 and peak < NOISE_GATE_THRESHOLD:
+                        to_send = memoryview(silence)[:j]
+                    else:
+                        to_send = out_mv[:j]
+                else:
+                    extract_slot(buf, out, num_read, slot_sel)
                     to_send = out_mv[:j]
                 sent = 0
                 while sent < j:
@@ -291,7 +349,13 @@ def run():
                         stat_rssi[0] = wlan.status('rssi')
                     except:
                         pass
-                    print(f"[pico] {elapsed}s {stat_kbps[0]:.0f}KB/s sent={sent_mb:.1f}MB rssi={stat_rssi[0]}")
+                    if USE_DSP:
+                        slot_name = "R" if slot_sel else "L"
+                        slot_info = f"slot=dsp-{slot_name} lpk={slot_lpk} rpk={slot_rpk}"
+                    else:
+                        slot_name = "R" if slot_sel else "L"
+                        slot_info = f"slot={slot_name} lpk={slot_lpk} rpk={slot_rpk}"
+                    print(f"[pico] {elapsed}s {stat_kbps[0]:.0f}KB/s sent={sent_mb:.1f}MB rssi={stat_rssi[0]} {slot_info}")
                     update_display(wifi_ip, True, elapsed, sent_mb)
                     last_log = now
 
