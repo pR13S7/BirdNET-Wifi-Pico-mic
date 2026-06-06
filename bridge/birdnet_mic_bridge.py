@@ -152,10 +152,10 @@ def notify_telegram(message):
 
 def notify_connected(addr):
     message = (
-        "<b>Mic connected</b>\n"
-        f"Service: {html.escape(SERVICE_NAME, quote=False)}\n"
-        f"Source: {html.escape(SOURCE_LABEL, quote=False)}\n"
-        f"Peer: {html.escape(addr[0], quote=False)}:{addr[1]}"
+        "🟢 <b>Mic connected</b>\n"
+        f"🔌 <b>Service:</b> {html.escape(SERVICE_NAME, quote=False)}\n"
+        f"🎙️ <b>Source:</b> {html.escape(SOURCE_LABEL, quote=False)}\n"
+        f"🌐 <b>Peer:</b> {html.escape(addr[0], quote=False)}:{addr[1]}"
     )
     notify_telegram(message)
 
@@ -165,12 +165,12 @@ def notify_disconnected(addr, reason, byte_count, started_at):
     duration_sec = max(int(time.time() - started_at), 0)
     mb = byte_count / (1024 * 1024)
     message = (
-        "<b>Mic disconnected</b>\n"
-        f"Service: {html.escape(SERVICE_NAME, quote=False)}\n"
-        f"Source: {html.escape(SOURCE_LABEL, quote=False)}\n"
-        f"Peer: {html.escape(peer, quote=False)}\n"
-        f"Reason: {html.escape(reason, quote=False)}\n"
-        f"Session: {duration_sec}s, {mb:.1f} MB"
+        "🔴 <b>Mic disconnected</b>\n"
+        f"🔌 <b>Service:</b> {html.escape(SERVICE_NAME, quote=False)}\n"
+        f"🎙️ <b>Source:</b> {html.escape(SOURCE_LABEL, quote=False)}\n"
+        f"🌐 <b>Peer:</b> {html.escape(peer, quote=False)}\n"
+        f"⚠️ <b>Reason:</b> {html.escape(reason, quote=False)}\n"
+        f"⏱️ <b>Session:</b> {duration_sec}s, {mb:.1f} MB"
     )
     notify_telegram(message)
 

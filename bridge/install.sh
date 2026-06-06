@@ -146,13 +146,25 @@ elif [[ -x "/usr/local/bin/telegram-send.sh" ]]; then
     TELEGRAM_SEND_CMD="/usr/local/bin/telegram-send.sh"
 fi
 
-if [[ -n "$TELEGRAM_SEND_CMD" && ! -x "$TELEGRAM_SEND_CMD" ]]; then
-    error "Telegram script is not executable: $TELEGRAM_SEND_CMD"
+if [[ -n "$TELEGRAM_SEND_CMD" && ! -f "$TELEGRAM_SEND_CMD" ]]; then
+    error "Telegram script not found: $TELEGRAM_SEND_CMD"
     exit 1
 fi
 
 if [[ -n "$TELEGRAM_SEND_CMD" ]]; then
     info "  Telegram: $TELEGRAM_SEND_CMD"
+    if command -v runuser >/dev/null 2>&1; then
+        if runuser -u "$SVC_USER" -- test -r "$TELEGRAM_SEND_CMD"; then
+            info "  Telegram access for $SVC_USER: readable"
+        else
+            warn "Telegram script is not readable by $SVC_USER; notifications will fail."
+            warn "If this script is shared with Transmission, keep current owner/group and grant ACL:"
+            warn "  sudo apt install -y acl"
+            warn "  sudo setfacl -m u:${SVC_USER}:rx ${TELEGRAM_SEND_CMD}"
+        fi
+    else
+        warn "runuser not found; unable to verify telegram script readability for $SVC_USER"
+    fi
 else
     info "  Telegram: disabled (script not found)"
 fi

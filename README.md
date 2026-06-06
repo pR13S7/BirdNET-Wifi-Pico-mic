@@ -396,6 +396,24 @@ that user can read/execute the script. Safe default:
 sudo chmod 755 /usr/local/bin/telegram-send.sh
 ```
 
+If the same script is already used by Transmission (owner/group
+`root:debian-transmission`), avoid changing ownership to keep existing torrent
+notifications working. Grant BirdNET user access with ACL:
+
+```bash
+sudo apt install -y acl
+sudo chgrp debian-transmission /usr/local/bin/telegram-send.sh
+sudo chmod 750 /usr/local/bin/telegram-send.sh
+sudo setfacl -m u:pr13s7:rx /usr/local/bin/telegram-send.sh
+```
+
+Verify both users can run it:
+
+```bash
+sudo -u debian-transmission /bin/bash /usr/local/bin/telegram-send.sh "transmission test"
+sudo -u pr13s7 /bin/bash /usr/local/bin/telegram-send.sh "birdnet test"
+```
+
 **Override defaults if needed:**
 
 ```bash
