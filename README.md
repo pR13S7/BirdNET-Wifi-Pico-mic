@@ -389,6 +389,13 @@ Save it as `/usr/local/bin/telegram-send.sh` and make it executable:
 sudo chmod +x /usr/local/bin/telegram-send.sh
 ```
 
+The bridge services run as your Linux user (for example `pr13s7`), so make sure
+that user can read/execute the script. Safe default:
+
+```bash
+sudo chmod 755 /usr/local/bin/telegram-send.sh
+```
+
 **Override defaults if needed:**
 
 ```bash

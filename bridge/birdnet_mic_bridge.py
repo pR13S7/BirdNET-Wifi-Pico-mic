@@ -127,8 +127,27 @@ def notify_telegram(message):
             check=False,
             timeout=TELEGRAM_NOTIFY_TIMEOUT_SEC,
         )
+    except PermissionError:
+        # Fallback: some users keep script readable but not executable (0644).
+        # Running via bash keeps notifications working in that setup.
+        try:
+            subprocess.run(
+                ["/bin/bash", TELEGRAM_SEND_CMD, message],
+                check=False,
+                timeout=TELEGRAM_NOTIFY_TIMEOUT_SEC,
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            print(
+                f"[bridge] Telegram notify failed: {e} "
+                f"(check read/execute permissions on {TELEGRAM_SEND_CMD})",
+                flush=True,
+            )
     except (OSError, subprocess.TimeoutExpired) as e:
-        print(f"[bridge] Telegram notify failed: {e}", flush=True)
+        print(
+            f"[bridge] Telegram notify failed: {e} "
+            f"(check read/execute permissions on {TELEGRAM_SEND_CMD})",
+            flush=True,
+        )
 
 
 def notify_connected(addr):

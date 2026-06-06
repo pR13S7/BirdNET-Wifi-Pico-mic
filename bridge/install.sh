@@ -176,13 +176,13 @@ install_service() {
     local source_tag="$4"
     local notch_hz="${5:-0}"
     local svc_file="/etc/systemd/system/${svc_name}.service"
-    local source_label="$source_tag mic"
+    local source_label="$source_tag"
     local telegram_env=""
 
     if [[ "$source_tag" == "pico" ]]; then
-        source_label="Pico 2W mic"
+        source_label="Pico-2W"
     elif [[ "$source_tag" == "esp32" ]]; then
-        source_label="ESP32 mic"
+        source_label="ESP32"
     fi
 
     if [[ -n "$TELEGRAM_SEND_CMD" ]]; then
