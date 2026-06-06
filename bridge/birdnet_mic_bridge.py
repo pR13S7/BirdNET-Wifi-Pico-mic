@@ -21,6 +21,7 @@ import os
 import shutil
 import time
 import threading
+import html
 
 LISTEN_IP = "0.0.0.0"
 LISTEN_PORT = int(os.environ.get("LISTEN_PORT", "5005"))
@@ -42,6 +43,10 @@ NOTCH_W = float(os.environ.get("NOTCH_W", "180"))
 
 RECS_DIR = os.environ.get("RECS_DIR", "/home/pr13s7/BirdSongs/StreamData")
 SOURCE_TAG = os.environ.get("SOURCE_TAG", "")
+SERVICE_NAME = os.environ.get("SERVICE_NAME", "birdnet-mic-bridge")
+SOURCE_LABEL = os.environ.get("SOURCE_LABEL", SOURCE_TAG or f"port-{LISTEN_PORT}")
+TELEGRAM_SEND_CMD = os.environ.get("TELEGRAM_SEND_CMD", "").strip()
+TELEGRAM_NOTIFY_TIMEOUT_SEC = float(os.environ.get("TELEGRAM_NOTIFY_TIMEOUT_SEC", "8"))
 
 STAGING_DIR = os.path.join(RECS_DIR, ".staging" + (f"-{SOURCE_TAG}" if SOURCE_TAG else ""))
 
@@ -113,6 +118,44 @@ def build_af_chain():
     return chain
 
 
+def notify_telegram(message):
+    if not TELEGRAM_SEND_CMD:
+        return
+    try:
+        subprocess.run(
+            [TELEGRAM_SEND_CMD, message],
+            check=False,
+            timeout=TELEGRAM_NOTIFY_TIMEOUT_SEC,
+        )
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"[bridge] Telegram notify failed: {e}", flush=True)
+
+
+def notify_connected(addr):
+    message = (
+        "<b>Mic connected</b>\n"
+        f"Service: {html.escape(SERVICE_NAME, quote=False)}\n"
+        f"Source: {html.escape(SOURCE_LABEL, quote=False)}\n"
+        f"Peer: {html.escape(addr[0], quote=False)}:{addr[1]}"
+    )
+    notify_telegram(message)
+
+
+def notify_disconnected(addr, reason, byte_count, started_at):
+    peer = f"{addr[0]}:{addr[1]}" if addr else "unknown"
+    duration_sec = max(int(time.time() - started_at), 0)
+    mb = byte_count / (1024 * 1024)
+    message = (
+        "<b>Mic disconnected</b>\n"
+        f"Service: {html.escape(SERVICE_NAME, quote=False)}\n"
+        f"Source: {html.escape(SOURCE_LABEL, quote=False)}\n"
+        f"Peer: {html.escape(peer, quote=False)}\n"
+        f"Reason: {html.escape(reason, quote=False)}\n"
+        f"Session: {duration_sec}s, {mb:.1f} MB"
+    )
+    notify_telegram(message)
+
+
 def start_ffmpeg():
     return subprocess.Popen(
         [
@@ -154,14 +197,20 @@ def main():
     if NOTCH_HZ > 0:
         print(f"[bridge] Notch: {NOTCH_HZ:g} Hz, width {NOTCH_W:g} Hz")
     else:
-        print(f"[bridge] Notch: disabled")
+        print("[bridge] Notch: disabled")
     print(f"[bridge] Filter chain: {build_af_chain()}")
     print(f"[bridge] Socket timeout: {CONN_TIMEOUT_SEC}s")
     print(f"[bridge] Source tag: {SOURCE_TAG or '(none)'}")
-    print(f"[bridge] No ALSA loopback needed for recording!")
+    print(f"[bridge] Service name: {SERVICE_NAME}")
+    print(f"[bridge] Source label: {SOURCE_LABEL}")
+    if TELEGRAM_SEND_CMD:
+        print(f"[bridge] Telegram notify: enabled ({TELEGRAM_SEND_CMD})")
+    else:
+        print("[bridge] Telegram notify: disabled (TELEGRAM_SEND_CMD not set)")
+    print("[bridge] No ALSA loopback needed for recording!")
 
     while running:
-        print("[bridge] Waiting for Pico 2W connection...", flush=True)
+        print(f"[bridge] Waiting for {SOURCE_LABEL} connection...", flush=True)
         conn, addr = srv.accept()
         conn.settimeout(CONN_TIMEOUT_SEC)
         print(f"[bridge] Connected: {addr}", flush=True)
@@ -173,16 +222,20 @@ def main():
             conn.close()
             continue
 
+        notify_connected(addr)
         byte_count = 0
         progress_step_bytes = max(int(PROGRESS_LOG_MB * 1024 * 1024), 1024 * 1024)
         next_log_at = progress_step_bytes
         last_rate_time = time.time()
         last_rate_bytes = 0
+        session_started = time.time()
+        disconnect_reason = "peer closed connection"
 
         try:
             while True:
                 data = conn.recv(BUFFER_SIZE)
                 if not data:
+                    disconnect_reason = "peer closed connection"
                     break
                 proc.stdin.write(data)
                 byte_count += len(data)
@@ -201,16 +254,18 @@ def main():
                     while next_log_at <= byte_count:
                         next_log_at += progress_step_bytes
         except (BrokenPipeError, ConnectionResetError, OSError, TimeoutError) as e:
+            disconnect_reason = str(e) or e.__class__.__name__
             print(f"[bridge] Connection lost: {e}", flush=True)
         finally:
             conn.close()
             try:
                 proc.stdin.close()
-            except:
+            except Exception:
                 pass
             proc.wait()
             flush_staging()
             print("[bridge] Client disconnected, restarting on next connect", flush=True)
+            notify_disconnected(addr, disconnect_reason, byte_count, session_started)
 
 
 if __name__ == "__main__":

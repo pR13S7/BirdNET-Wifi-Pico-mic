@@ -22,6 +22,9 @@ Options:
   --user USER         Linux user to run the service as (default: auto-detect)
   --recs-dir PATH     StreamData directory (default: ~USER/BirdSongs/StreamData)
   --mode MODE         Client mode: pico, esp32, or both (default: pico)
+  --telegram-script PATH
+                      Optional telegram sender script (default: auto-detect
+                      /usr/local/bin/telegram-send.sh if executable)
   --notch-pico HZ     Notch-filter the Pico stream at HZ to remove the INMP441
                       idle tone (recommended: 3575; 0 = off, default)
   --notch-esp32 HZ    Notch-filter the ESP32 stream at HZ (recommended: 3575;
@@ -45,6 +48,7 @@ RECS_DIR_OVERRIDE=""
 MODE="pico"
 NOTCH_PICO="0"
 NOTCH_ESP32="0"
+TELEGRAM_SCRIPT_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -52,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --user)         USER_OVERRIDE="$2"; shift 2 ;;
         --recs-dir)     RECS_DIR_OVERRIDE="$2"; shift 2 ;;
         --mode)         MODE="$2"; shift 2 ;;
+        --telegram-script) TELEGRAM_SCRIPT_OVERRIDE="$2"; shift 2 ;;
         --notch-pico)   NOTCH_PICO="$2"; shift 2 ;;
         --notch-esp32)  NOTCH_ESP32="$2"; shift 2 ;;
         -h|--help)      usage ;;
@@ -134,6 +139,24 @@ info "Installing ${SERVICE_NAME} (mode: ${MODE})..."
 info "  User:     $SVC_USER"
 info "  Recs dir: $RECS_DIR"
 
+TELEGRAM_SEND_CMD=""
+if [[ -n "$TELEGRAM_SCRIPT_OVERRIDE" ]]; then
+    TELEGRAM_SEND_CMD="$TELEGRAM_SCRIPT_OVERRIDE"
+elif [[ -x "/usr/local/bin/telegram-send.sh" ]]; then
+    TELEGRAM_SEND_CMD="/usr/local/bin/telegram-send.sh"
+fi
+
+if [[ -n "$TELEGRAM_SEND_CMD" && ! -x "$TELEGRAM_SEND_CMD" ]]; then
+    error "Telegram script is not executable: $TELEGRAM_SEND_CMD"
+    exit 1
+fi
+
+if [[ -n "$TELEGRAM_SEND_CMD" ]]; then
+    info "  Telegram: $TELEGRAM_SEND_CMD"
+else
+    info "  Telegram: disabled (script not found)"
+fi
+
 # Copy bridge script
 mkdir -p "$INSTALL_DIR"
 cp "$SCRIPT_DIR/birdnet_mic_bridge.py" "$INSTALL_DIR/birdnet_mic_bridge.py"
@@ -153,6 +176,18 @@ install_service() {
     local source_tag="$4"
     local notch_hz="${5:-0}"
     local svc_file="/etc/systemd/system/${svc_name}.service"
+    local source_label="$source_tag mic"
+    local telegram_env=""
+
+    if [[ "$source_tag" == "pico" ]]; then
+        source_label="Pico 2W mic"
+    elif [[ "$source_tag" == "esp32" ]]; then
+        source_label="ESP32 mic"
+    fi
+
+    if [[ -n "$TELEGRAM_SEND_CMD" ]]; then
+        telegram_env="Environment=TELEGRAM_SEND_CMD=${TELEGRAM_SEND_CMD}"
+    fi
 
     cat > "$svc_file" <<EOF
 [Unit]
@@ -169,7 +204,10 @@ Environment=RECS_DIR=${RECS_DIR}
 Environment=LISTEN_PORT=${port}
 Environment=INPUT_RATE=${input_rate}
 Environment=SOURCE_TAG=${source_tag}
+Environment=SOURCE_LABEL=${source_label}
+Environment=SERVICE_NAME=${svc_name}
 Environment=NOTCH_HZ=${notch_hz}
+${telegram_env}
 Restart=always
 RestartSec=5
 
@@ -225,6 +263,11 @@ fi
 info "╚══════════════════════════════════════════════════════╝"
 echo ""
 info "Set SERVER_PORT in each board's main.py to match."
+if [[ -n "$TELEGRAM_SEND_CMD" ]]; then
+info "Telegram notifications enabled for connect/disconnect events."
+else
+warn "Telegram notifications are disabled. Install a sender script and rerun with --telegram-script /path/to/telegram-send.sh"
+fi
 echo ""
 if [[ "$MODE" == "pico" || "$MODE" == "both" ]]; then
     systemctl status "$SERVICE_NAME" --no-pager || true

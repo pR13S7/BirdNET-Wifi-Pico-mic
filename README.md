@@ -347,6 +347,48 @@ The script automatically:
 - Detects your username and StreamData path
 - Masks `birdnet_recording.service` (conflicts with the bridge)
 
+### Telegram notifications (optional)
+
+If you already have a Telegram sender script (for example `/usr/local/bin/telegram-send.sh`),
+the bridge can send notifications when a microphone connects or disconnects.
+
+Install with explicit Telegram script path:
+
+```bash
+cd bridge/
+sudo bash install.sh --mode both --telegram-script /usr/local/bin/telegram-send.sh
+```
+
+The installer passes the script to both services (`birdnet-mic-bridge` and
+`birdnet-mic-bridge-2`), and each service reports its own source (`pico` or `esp32`)
+on every connect/disconnect event.
+
+Example `telegram-send.sh` content:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+BOT_TOKEN="123456789:YOUR_BOT_TOKEN_HERE"
+CHAT_ID="123456789"
+MESSAGE="${1:-}"
+
+if [[ -z "$MESSAGE" ]]; then
+  exit 0
+fi
+
+curl -sS -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+  -d chat_id="${CHAT_ID}" \
+  -d text="${MESSAGE}" \
+  -d parse_mode="HTML" >/dev/null
+```
+
+Save it as `/usr/local/bin/telegram-send.sh` and make it executable:
+
+```bash
+sudo chmod +x /usr/local/bin/telegram-send.sh
+```
+
 **Override defaults if needed:**
 
 ```bash
