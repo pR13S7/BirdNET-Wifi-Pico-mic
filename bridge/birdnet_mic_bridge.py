@@ -41,8 +41,13 @@ SEGMENT_SEC = 15
 NOTCH_HZ = float(os.environ.get("NOTCH_HZ", "0"))
 NOTCH_W = float(os.environ.get("NOTCH_W", "180"))
 DECLICK_W = int(os.environ.get("DECLICK_W", "10"))
-# Lower default aggressiveness to reduce "mechanical/ratchet" artifacts.
-DECLICK_O = int(os.environ.get("DECLICK_O", "20"))
+# ffmpeg adeclick 'o' must stay in [50, 95] (build-dependent hard limit).
+# Use the least aggressive valid default to avoid startup failures.
+DECLICK_O = int(os.environ.get("DECLICK_O", "50"))
+if DECLICK_O < 50:
+    DECLICK_O = 50
+elif DECLICK_O > 95:
+    DECLICK_O = 95
 
 RECS_DIR = os.environ.get("RECS_DIR", "/home/pr13s7/BirdSongs/StreamData")
 SOURCE_TAG = os.environ.get("SOURCE_TAG", "")
