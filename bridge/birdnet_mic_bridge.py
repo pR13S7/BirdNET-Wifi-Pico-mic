@@ -57,6 +57,9 @@ TELEGRAM_SEND_CMD = os.environ.get("TELEGRAM_SEND_CMD", "").strip()
 TELEGRAM_NOTIFY_TIMEOUT_SEC = float(os.environ.get("TELEGRAM_NOTIFY_TIMEOUT_SEC", "8"))
 
 STAGING_DIR = os.path.join(RECS_DIR, ".staging" + (f"-{SOURCE_TAG}" if SOURCE_TAG else ""))
+SAFE_SOURCE_TAG = "".join(
+    ch if (ch.isalnum() or ch in ("-", "_")) else "_" for ch in SOURCE_TAG
+).strip("_")
 
 running = True
 
@@ -124,6 +127,14 @@ def build_af_chain():
     if NOTCH_HZ > 0:
         chain += f",bandreject=f={NOTCH_HZ:g}:t=h:w={NOTCH_W:g}"
     return chain
+
+
+def segment_filename_pattern():
+    # In multi-service mode (Pico + ESP32), timestamp-only names can collide.
+    # Tag suffix keeps each source unique and prevents BirdNET queue races.
+    if SAFE_SOURCE_TAG:
+        return f"%Y-%m-%d-birdnet-%H:%M:%S-{SAFE_SOURCE_TAG}.wav"
+    return "%Y-%m-%d-birdnet-%H:%M:%S.wav"
 
 
 def notify_telegram(message):
@@ -199,7 +210,7 @@ def start_ffmpeg():
             "-segment_time", str(SEGMENT_SEC),
             "-segment_format", "wav",
             "-strftime", "1",
-            os.path.join(STAGING_DIR, "%Y-%m-%d-birdnet-%H:%M:%S.wav")
+            os.path.join(STAGING_DIR, segment_filename_pattern())
         ],
         stdin=subprocess.PIPE
     )
