@@ -41,9 +41,10 @@ SEGMENT_SEC = 15
 NOTCH_HZ = float(os.environ.get("NOTCH_HZ", "0"))
 NOTCH_W = float(os.environ.get("NOTCH_W", "180"))
 DECLICK_W = int(os.environ.get("DECLICK_W", "10"))
-# ffmpeg adeclick 'o' must stay in [50, 95] (build-dependent hard limit).
-# Use the least aggressive valid default to avoid startup failures.
-DECLICK_O = int(os.environ.get("DECLICK_O", "50"))
+# ffmpeg adeclick 'o' must stay in [50, 95] on this deployment.
+# Keep ESP32 behavior at historical 75 while allowing milder Pico default.
+_declick_default = "75" if INPUT_RATE >= 48000 else "50"
+DECLICK_O = int(os.environ.get("DECLICK_O", _declick_default))
 if DECLICK_O < 50:
     DECLICK_O = 50
 elif DECLICK_O > 95:
