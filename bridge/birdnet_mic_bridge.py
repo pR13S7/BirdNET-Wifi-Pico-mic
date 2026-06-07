@@ -50,6 +50,9 @@ if DECLICK_O < 50:
 elif DECLICK_O > 95:
     DECLICK_O = 95
 
+DENOISE_NF = int(os.environ.get("DENOISE_NF", "-25"))
+LOWPASS_HZ = int(os.environ.get("LOWPASS_HZ", "12000"))
+
 RECS_DIR = os.environ.get("RECS_DIR", "/home/pr13s7/BirdSongs/StreamData")
 SOURCE_TAG = os.environ.get("SOURCE_TAG", "")
 SERVICE_NAME = os.environ.get("SERVICE_NAME", "birdnet-mic-bridge")
@@ -127,6 +130,10 @@ def build_af_chain():
     chain = f"adeclick=w={DECLICK_W}:o={DECLICK_O},highpass=f=200:poles=2"
     if NOTCH_HZ > 0:
         chain += f",bandreject=f={NOTCH_HZ:g}:t=h:w={NOTCH_W:g}"
+    if DENOISE_NF < 0:
+        chain += f",afftdn=nf={DENOISE_NF}"
+    if LOWPASS_HZ > 0:
+        chain += f",lowpass=f={LOWPASS_HZ}"
     return chain
 
 
@@ -239,6 +246,14 @@ def main():
         print(f"[bridge] Notch: {NOTCH_HZ:g} Hz, width {NOTCH_W:g} Hz")
     else:
         print("[bridge] Notch: disabled")
+    if DENOISE_NF < 0:
+        print(f"[bridge] Denoise (FFT): {DENOISE_NF} dB")
+    else:
+        print("[bridge] Denoise (FFT): disabled")
+    if LOWPASS_HZ > 0:
+        print(f"[bridge] Lowpass: {LOWPASS_HZ} Hz")
+    else:
+        print("[bridge] Lowpass: disabled")
     print(f"[bridge] Filter chain: {build_af_chain()}")
     print(f"[bridge] Socket timeout: {CONN_TIMEOUT_SEC}s")
     print(f"[bridge] Source tag: {SOURCE_TAG or '(none)'}")
