@@ -38,7 +38,7 @@ SEGMENT_SEC = 15
 # Measured (FFT of raw streams): Pico ~3547 Hz, ESP32 ~3600 Hz cluster.
 # A shared center of 3575 Hz with a 180 Hz width covers both rigs.
 # NOTCH_HZ=0 disables it. NOTCH_W is the notch width in Hz (ffmpeg width_type=h).
-NOTCH_HZ = float(os.environ.get("NOTCH_HZ", "0"))
+NOTCH_HZ = float(os.environ.get("NOTCH_HZ", "3575"))
 NOTCH_W = float(os.environ.get("NOTCH_W", "180"))
 DECLICK_W = int(os.environ.get("DECLICK_W", "10"))
 # ffmpeg adeclick 'o' must stay in [50, 95] on this deployment.
@@ -50,8 +50,8 @@ if DECLICK_O < 50:
 elif DECLICK_O > 95:
     DECLICK_O = 95
 
-DENOISE_NF = int(os.environ.get("DENOISE_NF", "-25"))
-LOWPASS_HZ = int(os.environ.get("LOWPASS_HZ", "12000"))
+DENOISE_NF = int(os.environ.get("DENOISE_NF", "0"))
+LOWPASS_HZ = int(os.environ.get("LOWPASS_HZ", "0"))
 
 RECS_DIR = os.environ.get("RECS_DIR", "/home/pr13s7/BirdSongs/StreamData")
 SOURCE_TAG = os.environ.get("SOURCE_TAG", "")
