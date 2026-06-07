@@ -46,8 +46,9 @@ UPS_I2C_ID = 1
 UPS_SDA_PIN = 6
 UPS_SCL_PIN = 7
 UPS_I2C_FREQ = 100_000
-UPS_POLL_MS = 3000
-DISPLAY_REFRESH_MS = 3000
+# Keep UPS/LCD updates intentionally slow to avoid disturbing the audio hot loop.
+UPS_POLL_MS = 15000
+DISPLAY_REFRESH_MS = 15000
 UPS_CURRENT_DEADBAND_MA = 20
 UPS_V_EMPTY = 3.0
 UPS_V_FULL = 4.2
@@ -393,6 +394,7 @@ def run():
     global screen_on, btn_prev
     wlan, wifi_ip = connect_wifi()
     init_ups()
+    update_ups_state(time.ticks_ms())
 
     audio_in = I2S(
         0,
@@ -461,7 +463,6 @@ def run():
                 total_bytes += j
 
                 now = time.ticks_ms()
-                update_ups_state(now)
 
                 btn_val = btn_a.value()
                 if not btn_val and btn_prev:
@@ -471,12 +472,14 @@ def run():
                         if screen_on:
                             elapsed = time.ticks_diff(now, start) // 1000
                             sent_mb = total_bytes / (1024 * 1024)
+                            update_ups_state(now)
                             update_display(wifi_ip, True, elapsed, sent_mb)
                 btn_prev = btn_val
 
                 if time.ticks_diff(now, last_display) > DISPLAY_REFRESH_MS:
                     elapsed = time.ticks_diff(now, start) // 1000
                     sent_mb = total_bytes / (1024 * 1024)
+                    update_ups_state(now)
                     update_display(wifi_ip, True, elapsed, sent_mb)
                     last_display = now
 
