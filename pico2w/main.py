@@ -5,7 +5,7 @@ import socket
 import network
 import rp2
 import micropython
-from machine import I2S, Pin, freq
+from machine import I2S, I2C, Pin, freq
 
 freq(150_000_000)
 rp2.country('UA')
@@ -42,10 +42,36 @@ I2S_SCK = 16
 I2S_WS = 17
 I2S_SD = 18
 
+UPS_I2C_ID = 1
+UPS_SDA_PIN = 6
+UPS_SCL_PIN = 7
+UPS_I2C_FREQ = 100_000
+UPS_POLL_MS = 3000
+DISPLAY_REFRESH_MS = 3000
+UPS_CURRENT_DEADBAND_MA = 20
+UPS_V_EMPTY = 3.0
+UPS_V_FULL = 4.2
+
 led = Pin("LED", Pin.OUT)
 
 
 dsp_state = array('i', [0, 0, 0, 0])  # [hp_prev_x, hp_prev_y, last_good, blank_count]
+
+# UPS status (kept in mutable holders to avoid global writes in hot code paths).
+ups_i2c = [None]
+ups_addr = [0]
+ups_available = [False]
+ups_fail_count = [0]
+ups_last_ms = [0]
+ups_source = ["?"]  # "USB", "BAT", "?"
+ups_voltage = [0.0]
+ups_current_ma = [0]
+ups_percent = [-1]
+
+
+INA219_REG_SHUNT_V = 0x01
+INA219_REG_BUS_V = 0x02
+INA219_ADDR_CANDIDATES = (0x43, 0x42, 0x40, 0x41, 0x44, 0x45)
 
 
 @micropython.native
@@ -144,6 +170,110 @@ stat_pkts = [0]
 stat_mem = [0]
 
 
+def _u16_be(b):
+    return (b[0] << 8) | b[1]
+
+
+def _s16(v):
+    if v & 0x8000:
+        return v - 0x10000
+    return v
+
+
+def _clamp(v, lo, hi):
+    if v < lo:
+        return lo
+    if v > hi:
+        return hi
+    return v
+
+
+def init_ups():
+    try:
+        sda = Pin(UPS_SDA_PIN, Pin.IN, Pin.PULL_UP)
+        scl = Pin(UPS_SCL_PIN, Pin.IN, Pin.PULL_UP)
+        i2c = I2C(UPS_I2C_ID, sda=sda, scl=scl, freq=UPS_I2C_FREQ)
+        scanned = i2c.scan()
+        addr = 0
+        for candidate in INA219_ADDR_CANDIDATES:
+            if candidate in scanned:
+                addr = candidate
+                break
+        if addr == 0:
+            # Some setups do not reliably report scan results; probe known addresses directly.
+            for candidate in INA219_ADDR_CANDIDATES:
+                try:
+                    i2c.readfrom_mem(candidate, INA219_REG_BUS_V, 2)
+                    addr = candidate
+                    break
+                except Exception:
+                    pass
+        if addr == 0:
+            print(f"[ups] INA219 not found on I2C (scan={scanned})")
+            ups_i2c[0] = i2c
+            ups_available[0] = False
+            ups_addr[0] = 0
+            return
+        ups_i2c[0] = i2c
+        ups_addr[0] = addr
+        ups_available[0] = True
+        ups_fail_count[0] = 0
+        print(f"[ups] INA219 at 0x{addr:02X} (SDA=GP{UPS_SDA_PIN} SCL=GP{UPS_SCL_PIN})")
+    except Exception as e:
+        print(f"[ups] init failed: {type(e).__name__}: {e}")
+        ups_i2c[0] = None
+        ups_addr[0] = 0
+        ups_available[0] = False
+
+
+def update_ups_state(now_ms):
+    if ups_i2c[0] is None:
+        return
+    if time.ticks_diff(now_ms, ups_last_ms[0]) < UPS_POLL_MS:
+        return
+    ups_last_ms[0] = now_ms
+    if ups_addr[0] == 0:
+        return
+    try:
+        shunt_raw = _s16(_u16_be(ups_i2c[0].readfrom_mem(ups_addr[0], INA219_REG_SHUNT_V, 2)))
+        bus_raw = _u16_be(ups_i2c[0].readfrom_mem(ups_addr[0], INA219_REG_BUS_V, 2))
+        bus_v = ((bus_raw >> 3) * 4) / 1000.0
+
+        # Pico-UPS-A uses 10mOhm shunt: shunt register LSB=10uV => current[mA] ~= raw.
+        current_ma = shunt_raw
+        if current_ma > UPS_CURRENT_DEADBAND_MA:
+            source = "USB"
+        elif current_ma < -UPS_CURRENT_DEADBAND_MA:
+            source = "BAT"
+        else:
+            source = ups_source[0]
+            if source not in ("USB", "BAT"):
+                source = "USB"
+
+        pct = int(((bus_v - UPS_V_EMPTY) * 100) / (UPS_V_FULL - UPS_V_EMPTY))
+        pct = _clamp(pct, 0, 100)
+
+        ups_voltage[0] = bus_v
+        ups_current_ma[0] = current_ma
+        ups_percent[0] = pct
+        ups_source[0] = source
+        ups_available[0] = True
+        ups_fail_count[0] = 0
+    except Exception as e:
+        ups_fail_count[0] += 1
+        if ups_fail_count[0] >= 2:
+            ups_available[0] = False
+            ups_percent[0] = -1
+            ups_source[0] = "?"
+        print(f"[ups] read failed ({ups_fail_count[0]}): {type(e).__name__}: {e}")
+
+
+def fmt_ups_status():
+    if not ups_available[0] or ups_percent[0] < 0:
+        return "PWR: ?  BAT: N/A", ORANGE
+    return f"PWR: {ups_source[0]}  BAT: {ups_percent[0]}%  {ups_voltage[0]:.2f}V", CYAN
+
+
 def fmt_uptime(sec):
     d = sec // 86400
     h = (sec % 86400) // 3600
@@ -182,6 +312,8 @@ def draw_info(wifi_ip, bridge, uptime_s, sent_mb, msg):
     lcd.hline(4, 130, 232, GRAY)
 
     lcd.text(f"Rate: {SAMPLE_RATE}Hz  Mem: {stat_mem[0]}KB", 4, 138, GRAY)
+    ups_line, ups_color = fmt_ups_status()
+    lcd.text(ups_line, 4, 150, ups_color)
 
     if msg:
         lcd.hline(4, 220, 232, GRAY)
@@ -260,6 +392,7 @@ def tcp_connect(wifi_ip):
 def run():
     global screen_on, btn_prev
     wlan, wifi_ip = connect_wifi()
+    init_ups()
 
     audio_in = I2S(
         0,
@@ -293,6 +426,7 @@ def run():
         total_bytes = 0
         start = time.ticks_ms()
         last_log = start
+        last_display = start
 
         update_display(wifi_ip, True, 0, 0)
 
@@ -327,6 +461,7 @@ def run():
                 total_bytes += j
 
                 now = time.ticks_ms()
+                update_ups_state(now)
 
                 btn_val = btn_a.value()
                 if not btn_val and btn_prev:
@@ -338,6 +473,12 @@ def run():
                             sent_mb = total_bytes / (1024 * 1024)
                             update_display(wifi_ip, True, elapsed, sent_mb)
                 btn_prev = btn_val
+
+                if time.ticks_diff(now, last_display) > DISPLAY_REFRESH_MS:
+                    elapsed = time.ticks_diff(now, start) // 1000
+                    sent_mb = total_bytes / (1024 * 1024)
+                    update_display(wifi_ip, True, elapsed, sent_mb)
+                    last_display = now
 
                 if time.ticks_diff(now, last_log) > 60_000:
                     elapsed = time.ticks_diff(now, start) // 1000
@@ -355,7 +496,8 @@ def run():
                     else:
                         slot_name = "R" if slot_sel else "L"
                         slot_info = f"slot={slot_name} lpk={slot_lpk} rpk={slot_rpk}"
-                    print(f"[pico] {elapsed}s {stat_kbps[0]:.0f}KB/s sent={sent_mb:.1f}MB rssi={stat_rssi[0]} {slot_info}")
+                    ups_info = f"ups={ups_source[0]} {ups_percent[0]}% {ups_voltage[0]:.2f}V"
+                    print(f"[pico] {elapsed}s {stat_kbps[0]:.0f}KB/s sent={sent_mb:.1f}MB rssi={stat_rssi[0]} {slot_info} {ups_info}")
                     update_display(wifi_ip, True, elapsed, sent_mb)
                     last_log = now
 
