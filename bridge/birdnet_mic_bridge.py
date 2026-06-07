@@ -132,9 +132,10 @@ def build_af_chain():
 
 def segment_filename_pattern():
     # In multi-service mode (Pico + ESP32), timestamp-only names can collide.
-    # Tag suffix keeps each source unique and prevents BirdNET queue races.
+    # BirdNET parser expects the stem to END with HH:MM:SS, so keep source tag
+    # before "birdnet-<time>" instead of appending it at the end.
     if SAFE_SOURCE_TAG:
-        return f"%Y-%m-%d-birdnet-%H:%M:%S-{SAFE_SOURCE_TAG}.wav"
+        return f"%Y-%m-%d-{SAFE_SOURCE_TAG}-birdnet-%H:%M:%S.wav"
     return "%Y-%m-%d-birdnet-%H:%M:%S.wav"
 
 
