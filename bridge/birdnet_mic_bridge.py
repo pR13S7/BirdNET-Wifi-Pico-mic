@@ -40,6 +40,9 @@ SEGMENT_SEC = 15
 # NOTCH_HZ=0 disables it. NOTCH_W is the notch width in Hz (ffmpeg width_type=h).
 NOTCH_HZ = float(os.environ.get("NOTCH_HZ", "0"))
 NOTCH_W = float(os.environ.get("NOTCH_W", "180"))
+DECLICK_W = int(os.environ.get("DECLICK_W", "10"))
+# Lower default aggressiveness to reduce "mechanical/ratchet" artifacts.
+DECLICK_O = int(os.environ.get("DECLICK_O", "20"))
 
 RECS_DIR = os.environ.get("RECS_DIR", "/home/pr13s7/BirdSongs/StreamData")
 SOURCE_TAG = os.environ.get("SOURCE_TAG", "")
@@ -112,7 +115,7 @@ def flush_staging():
 
 
 def build_af_chain():
-    chain = "adeclick=w=10:o=75,highpass=f=200:poles=2"
+    chain = f"adeclick=w={DECLICK_W}:o={DECLICK_O},highpass=f=200:poles=2"
     if NOTCH_HZ > 0:
         chain += f",bandreject=f={NOTCH_HZ:g}:t=h:w={NOTCH_W:g}"
     return chain
@@ -213,6 +216,7 @@ def main():
     print(f"[bridge] Writing {SEGMENT_SEC}s WAV files to {RECS_DIR}")
     print(f"[bridge] Staging via {STAGING_DIR} (atomic move)")
     print(f"[bridge] Input: {INPUT_RATE} Hz s16le mono → {OUTPUT_RATE} Hz WAV")
+    print(f"[bridge] Declick: w={DECLICK_W} o={DECLICK_O}")
     if NOTCH_HZ > 0:
         print(f"[bridge] Notch: {NOTCH_HZ:g} Hz, width {NOTCH_W:g} Hz")
     else:

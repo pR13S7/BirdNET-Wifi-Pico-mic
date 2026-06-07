@@ -8,3 +8,5 @@ pico/__pycache__
 esp32/test_mic.sh
 pico2w/__pycache__
 bridge/__pycache__
+bridge/__pycache__/birdnet_mic_bridge.cpython-39.pyc
+pico2w/__pycache__/main.cpython-39.pyc
