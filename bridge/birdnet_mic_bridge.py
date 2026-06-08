@@ -50,6 +50,25 @@ if DECLICK_O < 50:
 elif DECLICK_O > 95:
     DECLICK_O = 95
 
+# adeclick is the most invasive stage in the chain and ffmpeg clamps its
+# outlier threshold 'o' to >=50, so it can only be turned off, not softened.
+# Default OFF (gentle): the on-device DSP (Pico blanking / ESP32 slew limiter)
+# already declicks at the source, so bridge-side adeclick is a redundant second
+# pass that can leave a faint "ratchet" texture on quiet clips. Set
+# DECLICK_ENABLE=1 to restore the aggressive bridge-side click removal.
+DECLICK_ENABLE = os.environ.get("DECLICK_ENABLE", "0").strip().lower() not in (
+    "0", "false", "no", "off", ""
+)
+
+# High-pass to drop DC/wind/handling rumble. Tunable so it can be softened or
+# removed: HIGHPASS_HZ=0 disables it; HIGHPASS_POLES=1 (default, gentle) gives a
+# 6 dB/oct slope, HIGHPASS_POLES=2 a steeper 12 dB/oct. Keep the cutoff well
+# below 1 kHz — many target birds sing under 1 kHz (owls/doves/etc.).
+HIGHPASS_HZ = int(os.environ.get("HIGHPASS_HZ", "200"))
+HIGHPASS_POLES = int(os.environ.get("HIGHPASS_POLES", "1"))
+if HIGHPASS_POLES not in (1, 2):
+    HIGHPASS_POLES = 1
+
 DENOISE_NF = int(os.environ.get("DENOISE_NF", "0"))
 LOWPASS_HZ = int(os.environ.get("LOWPASS_HZ", "0"))
 
@@ -127,14 +146,19 @@ def flush_staging():
 
 
 def build_af_chain():
-    chain = f"adeclick=w={DECLICK_W}:o={DECLICK_O},highpass=f=200:poles=2"
+    stages = []
+    if DECLICK_ENABLE and DECLICK_W > 0:
+        stages.append(f"adeclick=w={DECLICK_W}:o={DECLICK_O}")
+    if HIGHPASS_HZ > 0:
+        stages.append(f"highpass=f={HIGHPASS_HZ}:poles={HIGHPASS_POLES}")
     if NOTCH_HZ > 0:
-        chain += f",bandreject=f={NOTCH_HZ:g}:t=h:w={NOTCH_W:g}"
+        stages.append(f"bandreject=f={NOTCH_HZ:g}:t=h:w={NOTCH_W:g}")
     if DENOISE_NF < 0:
-        chain += f",afftdn=nf={DENOISE_NF}"
+        stages.append(f"afftdn=nf={DENOISE_NF}")
     if LOWPASS_HZ > 0:
-        chain += f",lowpass=f={LOWPASS_HZ}"
-    return chain
+        stages.append(f"lowpass=f={LOWPASS_HZ}")
+    # ffmpeg's -af cannot be empty; anull passes the audio through untouched.
+    return ",".join(stages) if stages else "anull"
 
 
 def segment_filename_pattern():
@@ -241,7 +265,14 @@ def main():
     print(f"[bridge] Writing {SEGMENT_SEC}s WAV files to {RECS_DIR}")
     print(f"[bridge] Staging via {STAGING_DIR} (atomic move)")
     print(f"[bridge] Input: {INPUT_RATE} Hz s16le mono → {OUTPUT_RATE} Hz WAV")
-    print(f"[bridge] Declick: w={DECLICK_W} o={DECLICK_O}")
+    if DECLICK_ENABLE and DECLICK_W > 0:
+        print(f"[bridge] Declick: w={DECLICK_W} o={DECLICK_O}")
+    else:
+        print("[bridge] Declick: disabled")
+    if HIGHPASS_HZ > 0:
+        print(f"[bridge] Highpass: {HIGHPASS_HZ} Hz, {HIGHPASS_POLES}-pole")
+    else:
+        print("[bridge] Highpass: disabled")
     if NOTCH_HZ > 0:
         print(f"[bridge] Notch: {NOTCH_HZ:g} Hz, width {NOTCH_W:g} Hz")
     else:

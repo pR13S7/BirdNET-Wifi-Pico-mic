@@ -29,6 +29,12 @@ Options:
                       idle tone (recommended: 3575; 0 = off, default)
   --notch-esp32 HZ    Notch-filter the ESP32 stream at HZ (recommended: 3575;
                       0 = off, default)
+  --gentle            Minimal bridge processing for all sources: ffmpeg
+                      click removal off + soft 1-pole high-pass (this is the
+                      default; flag just makes it explicit)
+  --declick MODE      Restore aggressive bridge-side click removal (ffmpeg
+                      adeclick + steeper 2-pole high-pass) for pico, esp32,
+                      or both. On-device DSP still runs regardless.
   --uninstall         Remove the bridge service(s) and files
   -h, --help          Show this help
 
@@ -49,6 +55,12 @@ MODE="pico"
 NOTCH_PICO="0"
 NOTCH_ESP32="0"
 TELEGRAM_SCRIPT_OVERRIDE=""
+# Gentle defaults (declick off, soft 1-pole high-pass). --declick re-enables
+# the aggressive ffmpeg click removal + steeper 2-pole high-pass per source.
+DECLICK_PICO="0"
+DECLICK_ESP32="0"
+HP_POLES_PICO="1"
+HP_POLES_ESP32="1"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -59,6 +71,19 @@ while [[ $# -gt 0 ]]; do
         --telegram-script) TELEGRAM_SCRIPT_OVERRIDE="$2"; shift 2 ;;
         --notch-pico)   NOTCH_PICO="$2"; shift 2 ;;
         --notch-esp32)  NOTCH_ESP32="$2"; shift 2 ;;
+        --gentle)
+            DECLICK_PICO="0"; HP_POLES_PICO="1"
+            DECLICK_ESP32="0"; HP_POLES_ESP32="1"
+            shift ;;
+        --declick)
+            case "$2" in
+                pico)  DECLICK_PICO="1"; HP_POLES_PICO="2" ;;
+                esp32) DECLICK_ESP32="1"; HP_POLES_ESP32="2" ;;
+                both)  DECLICK_PICO="1"; HP_POLES_PICO="2"
+                       DECLICK_ESP32="1"; HP_POLES_ESP32="2" ;;
+                *)     error "--declick must be pico, esp32, or both"; exit 1 ;;
+            esac
+            shift 2 ;;
         -h|--help)      usage ;;
         *)              error "Unknown option: $1"; usage ;;
     esac
@@ -187,9 +212,13 @@ install_service() {
     local input_rate="$3"
     local source_tag="$4"
     local notch_hz="${5:-0}"
+    local declick="${6:-0}"
+    local hp_poles="${7:-1}"
     local svc_file="/etc/systemd/system/${svc_name}.service"
     local source_label="$source_tag"
     local telegram_env=""
+    local declick_label="off"
+    [[ "$declick" == "1" ]] && declick_label="on"
 
     if [[ "$source_tag" == "pico" ]]; then
         source_label="Pico-2W"
@@ -219,6 +248,8 @@ Environment=SOURCE_TAG=${source_tag}
 Environment=SOURCE_LABEL=${source_label}
 Environment=SERVICE_NAME=${svc_name}
 Environment=NOTCH_HZ=${notch_hz}
+Environment=DECLICK_ENABLE=${declick}
+Environment=HIGHPASS_POLES=${hp_poles}
 ${telegram_env}
 Restart=always
 RestartSec=5
@@ -226,18 +257,18 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-    info "Created $svc_file (port $port, ${input_rate}Hz, tag=${source_tag}, notch=${notch_hz}Hz)"
+    info "Created $svc_file (port $port, ${input_rate}Hz, tag=${source_tag}, notch=${notch_hz}Hz, declick=${declick_label}, hp_poles=${hp_poles})"
     systemctl enable "$svc_name"
     systemctl restart "$svc_name"
     info "Service $svc_name enabled and started"
 }
 
 if [[ "$MODE" == "pico" || "$MODE" == "both" ]]; then
-    install_service "$SERVICE_NAME" 5005 16000 "pico" "$NOTCH_PICO"
+    install_service "$SERVICE_NAME" 5005 16000 "pico" "$NOTCH_PICO" "$DECLICK_PICO" "$HP_POLES_PICO"
 fi
 
 if [[ "$MODE" == "esp32" || "$MODE" == "both" ]]; then
-    install_service "${SERVICE_NAME}-2" 5006 48000 "esp32" "$NOTCH_ESP32"
+    install_service "${SERVICE_NAME}-2" 5006 48000 "esp32" "$NOTCH_ESP32" "$DECLICK_ESP32" "$HP_POLES_ESP32"
 fi
 
 systemctl daemon-reload
