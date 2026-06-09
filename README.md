@@ -32,9 +32,9 @@ Two microcontroller platforms supported:
 
 ## 1. How it works
 
-The INMP441 is a **digital I2S microphone** — it outputs a clocked digital bitstream, not an analog voltage. The microcontroller's hardware I2S peripheral captures audio data directly into memory buffers at 22050 Hz. The CPU is free for WiFi — no manual ADC timing or gain calibration needed.
+The INMP441 is a **digital I2S microphone** — it outputs a clocked digital bitstream, not an analog voltage. The microcontroller's hardware I2S peripheral captures audio data directly into memory buffers (Pico 2W at 16000 Hz, ESP32-S3 at 48000 Hz). The CPU is free for WiFi — no manual ADC timing or gain calibration needed.
 
-On the Pi, a **bridge service** accepts the TCP connection, pipes the audio through `ffmpeg` for gentle filtering (high-pass at 200 Hz, low-pass at 10 kHz) and resampling (22050 Hz → 48 kHz), and writes **15-second WAV files** directly to BirdNET-Pi's `StreamData` folder. The **analysis service** picks up each new WAV file and runs it through the BirdNET neural network for species identification.
+On the Pi, a **bridge service** accepts the TCP connection, pipes the audio through `ffmpeg` for gentle filtering (high-pass at 200 Hz) and resampling to 48 kHz, and writes **15-second WAV files** directly to BirdNET-Pi's `StreamData` folder. The **analysis service** picks up each new WAV file and runs it through the BirdNET neural network for species identification.
 
 ### Architecture
 
@@ -120,16 +120,16 @@ If you already have a Pico 2W, it works fine with the right router settings (see
 | Frequency range      | 60 Hz – 15 kHz                                  |
 | Data format          | 24-bit I2S, MSB-first, requires 64 SCK/frame   |
 | Channel select (L/R) | Low = left channel, High = right channel        |
-| Sample rates         | Up to 48 kHz (we use 22050 Hz)                  |
+| Sample rates         | Up to 48 kHz (Pico 2W: 16000 Hz, ESP32-S3: 48000 Hz) |
 
-> **Tip:** The 60 Hz – 15 kHz range easily covers typical bird vocalizations (1 kHz – 10 kHz). At 22050 Hz sample rate, we capture frequencies up to ~11 kHz — more than enough for most species.
+> **Tip:** The 60 Hz – 15 kHz range easily covers typical bird vocalizations (1 kHz – 10 kHz). At 16000 Hz (Pico) or 48000 Hz (ESP32), we capture frequencies up to 8 kHz or 24 kHz respectively — more than enough for most species.
 
 ### Why I2S beats analog ADC for this project
 
 | Aspect           | Analog (SPH8878LR5H-1 + ADC) | Digital (INMP441 I2S)       |
 | ---------------- | ----------------------------- | --------------------------- |
 | Noise floor      | ADC + WiFi switching noise    | Clean digital signal        |
-| Sample rate      | 16 kHz max (MicroPython CPU)  | 22050+ Hz (hardware PIO)   |
+| Sample rate      | 16 kHz max (MicroPython CPU)  | 16000–48000 Hz (hardware PIO) |
 | Gain calibration | Required (DC offset + gain)   | Not needed                  |
 | Wiring           | 3 wires + 2 caps recommended  | 5 wires, no caps            |
 | Dynamic range    | 12-bit effective              | 24-bit from mic             |
@@ -163,9 +163,7 @@ If you already have a Pico 2W, it works fine with the right router settings (see
 The ESP32's WiFi radio can inject impulsive noise (clicks) into the I2S data path. The firmware includes two software countermeasures:
 
 - **Slew-rate limiter** — caps maximum sample-to-sample change to ±3000, suppressing single-sample spikes from WiFi TX bursts
-- **DC-blocking high-pass filter** — removes sub-38 Hz rumble and DC offset
-
-The bridge additionally runs ffmpeg's `adeclick` filter to catch any remaining impulses.
+- **DC-blocking high-pass filter** — removes sub-~90 Hz rumble and DC offset (alpha 253/256 at 48000 Hz)
 
 > **Note:** A decoupling capacitor across INMP441 VDD/GND is often recommended, but on breakout boards with long leads it can create LC oscillation and make noise worse. Only add one if you can solder an SMD cap directly at the INMP441 IC pads.
 
@@ -198,17 +196,15 @@ Five signal connections plus one channel-select tie to ground. No decoupling cap
 
 The Pico 2W's CYW43439 WiFi chip communicates over SPI, injecting **multi-sample** noise bursts into the I2S data path (unlike the ESP32's single-sample spikes). The firmware uses a different strategy:
 
-- **Spike detection + blanking window** — when a sample-to-sample delta exceeds ±1500, the output holds the last known good value for 8 consecutive samples (~0.5ms), covering the full SPI transaction burst
-- **DC-blocking high-pass filter** — removes sub-38 Hz rumble and DC offset
+- **Spike detection + blanking window** — when a sample-to-sample delta exceeds ±12000, the output holds the last known good value for 2 consecutive samples (~0.125 ms at 16000 Hz), covering the SPI burst
+- **DC-blocking high-pass filter** — removes sub-~154 Hz rumble and DC offset (alpha 241/256 at 16000 Hz)
 - **Reduced TX power** (8 dBm) — less radiated energy = smaller SPI bursts
-
-The bridge additionally runs ffmpeg's `adeclick` filter as a second layer.
 
 | Interference type | ESP32-S3 | Pico 2W |
 |-------------------|----------|---------|
 | Source | On-die RF coupling | SPI bus to CYW43439 |
 | Pattern | Single-sample spikes | Multi-sample bursts |
-| Fix | Slew-rate clamp (±3000) | Blanking window (8 samples) |
+| Fix | Slew-rate clamp (±3000) | Blanking window (2 samples) |
 
 ---
 
@@ -293,11 +289,11 @@ mpremote connect /dev/cu.usbmodem* reset
 
 Open [Thonny](https://thonny.org), select **MicroPython (Raspberry Pi Pico)** as the interpreter, then:
 
-1. Open `pico/main.py` — edit `WIFI_SSID`, `WIFI_PASSWORD`, and `SERVER_IP` (your Pi 4B's IP address)
+1. Open `pico2w/main.py` — edit `WIFI_SSID`, `WIFI_PASSWORD`, and `SERVER_IP` (your Pi 4B's IP address)
 2. Save to the Pico: **File → Save as → Raspberry Pi Pico → `main.py`**
 3. (Optional) Also upload `pico/lcd.py` if using the Waveshare LCD 1.3" display
 
-The firmware reads audio from the INMP441 via hardware I2S (32-bit stereo framing for proper 64 SCK/frame timing required by the INMP441), extracts the left channel as 16-bit samples, and streams them over TCP to the Pi at ~43 KB/s.
+The firmware reads audio from the INMP441 via hardware I2S (32-bit stereo framing for proper 64 SCK/frame timing required by the INMP441), extracts the active channel as 16-bit samples, and streams them over TCP to the Pi at ~31 KB/s.
 
 > **Warning:** The Pico 2W only supports **2.4 GHz WiFi**. It cannot connect to 5 GHz networks.
 
@@ -305,10 +301,10 @@ The firmware reads audio from the INMP441 via hardware I2S (32-bit stereo framin
 
 | Parameter       | Value            | Notes                                         |
 | --------------- | ---------------- | --------------------------------------------- |
-| Sample rate     | 22050 Hz         | Hardware-clocked via PIO                      |
+| Sample rate     | 16000 Hz         | Hardware-clocked via PIO                      |
 | I2S format      | 32-bit stereo    | Required for INMP441's 64 SCK/frame           |
-| Output format   | 16-bit mono      | Left channel extracted, sent over TCP         |
-| Packet size     | 1024 samples     | 2048 bytes per send (~46 ms of audio)         |
+| Output format   | 16-bit mono      | Active channel extracted, sent over TCP       |
+| Packet size     | 1024 samples     | 2048 bytes per send (~64 ms of audio)         |
 | TCP port        | 5005             | Connects to bridge on Pi                      |
 | Reconnect delay | 3 seconds        | Auto-reconnects on connection loss            |
 
@@ -428,14 +424,28 @@ sudo bash install.sh --uninstall
 
 ### What the bridge does
 
-1. Listens on TCP port 5005 for microcontroller connection
-2. Receives raw 16-bit 22050 Hz mono PCM audio
+1. Listens on TCP port 5005 (Pico) or 5006 (ESP32) for microcontroller connection
+2. Receives raw 16-bit mono PCM audio: 16000 Hz from Pico 2W, 48000 Hz from ESP32-S3
 3. Pipes through `ffmpeg` with:
-   - **High-pass 200 Hz** — removes DC offset, wind noise, handling rumble
-   - **Low-pass 10 kHz** — removes artifacts above bird frequency range
-   - **Resample 22050 → 48000 Hz** — BirdNET-Pi expects 48 kHz
+   - **High-pass 200 Hz** (1-pole, gentle 6 dB/oct) — removes wind noise and handling rumble
+   - **Resample to 48000 Hz** — BirdNET-Pi expects 48 kHz
+   - Optional: `adeclick`, notch, lowpass — disabled by default, enable via env vars (see below)
 4. Writes 15-second WAV files to `~/BirdSongs/StreamData/`
 5. Auto-reconnects when microcontroller disconnects
+
+### Bridge tuning (environment variables)
+
+The bridge service reads these variables from its systemd unit. Set them via `--declick`/`--notch-pico`/`--notch-esp32` in `install.sh`, or by editing the service file directly.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `HIGHPASS_HZ` | `200` | High-pass cutoff in Hz; `0` disables |
+| `HIGHPASS_POLES` | `1` | `1` = soft 6 dB/oct, `2` = steeper 12 dB/oct |
+| `DECLICK_ENABLE` | `0` | `1` = enable ffmpeg `adeclick` (aggressive click removal) |
+| `NOTCH_HZ` | `0` | Notch filter center in Hz; `0` disables. Recommended: `3575` to suppress the INMP441 idle tone |
+| `NOTCH_W` | `180` | Notch width in Hz |
+| `LOWPASS_HZ` | `0` | Low-pass cutoff in Hz; `0` disables |
+| `INPUT_RATE` | `16000` | Input sample rate — set automatically by `install.sh` (16000 for Pico, 48000 for ESP32) |
 
 ### BirdNET-Pi configuration
 
@@ -463,7 +473,7 @@ sudo systemctl status birdnet_analysis.service
 
 ### Step 2 — Power on the microcontroller
 
-**ESP32-S3:** The NeoPixel LED shows status — red while connecting WiFi, blue when connected to the bridge, green pulses during streaming.
+**ESP32-S3:** The NeoPixel LED shows status — blue while connecting WiFi, cyan when WiFi is up and waiting for the bridge, green when streaming, red on WiFi failure or crash.
 
 **Pico 2W:** The LED blinks while connecting to WiFi, then goes solid.
 
