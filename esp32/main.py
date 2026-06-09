@@ -1,9 +1,9 @@
 import gc
 import time
 import socket
+from array import array
 import network
 import micropython
-from array import array
 from machine import I2S, Pin
 import neopixel
 
@@ -21,10 +21,9 @@ I2S_BITS = 32
 I2S_FMT = I2S.MONO
 RECONNECT_DELAY = 3
 
-NOISE_GATE_THRESHOLD = 50
-SLEW_LIMIT = 3000
+NOISE_GATE_THRESHOLD = 0
 
-state = array('i', [0, 0, 0])  # [hp_prev_x, hp_prev_y, slew_prev]
+state = array('i', [0, 0, 0, 0])  # [hp_prev_x, hp_prev_y, last_good, blank_count]
 
 
 @micropython.viper
@@ -34,7 +33,8 @@ def process_audio(buf_in, buf_out, frames: int, st) -> int:
     s = ptr32(st)
     hp_px = s[0]
     hp_py = s[1]
-    sl_prev = s[2]
+    last_good = s[2]
+    blank = s[3]
     peak = 0
     for i in range(frames):
         raw = int(inp[i * 4 + 2]) | (int(inp[i * 4 + 3]) << 8)
@@ -47,12 +47,14 @@ def process_audio(buf_in, buf_out, frames: int, st) -> int:
             y = 32767
         elif y < -32768:
             y = -32768
-        delta = y - sl_prev
-        if delta > 3000:
-            y = sl_prev + 3000
-        elif delta < -3000:
-            y = sl_prev - 3000
-        sl_prev = y
+        delta = y - last_good
+        if delta > 16000 or delta < -16000:
+            blank = 2
+        if blank > 0:
+            y = last_good
+            blank -= 1
+        else:
+            last_good = y
         amp = y if y >= 0 else -y
         if amp > peak:
             peak = amp
@@ -61,7 +63,8 @@ def process_audio(buf_in, buf_out, frames: int, st) -> int:
         out[i * 2 + 1] = (val >> 8) & 0xFF
     s[0] = hp_px
     s[1] = hp_py
-    s[2] = sl_prev
+    s[2] = last_good
+    s[3] = blank
     return peak
 
 # ESP32-S3 I2S pins (any GPIO works, no WS=SCK+1 constraint)
@@ -157,6 +160,7 @@ def run():
     state[0] = 0
     state[1] = 0
     state[2] = 0
+    state[3] = 0
 
     while True:
         sock = tcp_connect()
@@ -174,7 +178,7 @@ def run():
                 frames = num_read // 4
                 peak = process_audio(buf, out, frames, state)
 
-                if peak < NOISE_GATE_THRESHOLD:
+                if NOISE_GATE_THRESHOLD > 0 and peak < NOISE_GATE_THRESHOLD:
                     to_send = memoryview(silence)[:frames * 2]
                 else:
                     to_send = out_mv[:frames * 2]

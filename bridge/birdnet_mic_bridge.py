@@ -36,10 +36,13 @@ SEGMENT_SEC = 15
 
 # Optional narrow notch to remove the INMP441 sigma-delta idle tone.
 # Measured (FFT of raw streams): Pico ~3547 Hz, ESP32 ~3600 Hz cluster.
-# A shared center of 3575 Hz with a 180 Hz width covers both rigs.
-# NOTCH_HZ=0 disables it. NOTCH_W is the notch width in Hz (ffmpeg width_type=h).
-NOTCH_HZ = float(os.environ.get("NOTCH_HZ", "3575"))
-NOTCH_W = float(os.environ.get("NOTCH_W", "180"))
+# OFF by default (NOTCH_HZ=0) to match install.sh and because 3575 Hz sits in
+# the prime songbird band (2-8 kHz) — a permanent notch removes real bird energy
+# there. Enable per rig via NOTCH_HZ (e.g. 3547 for Pico, 3600 for ESP32). When
+# enabled, the default width is kept tight (high-Q) to minimise collateral loss.
+# NOTCH_W is the notch width in Hz (ffmpeg width_type=h).
+NOTCH_HZ = float(os.environ.get("NOTCH_HZ", "0"))
+NOTCH_W = float(os.environ.get("NOTCH_W", "60"))
 DECLICK_W = int(os.environ.get("DECLICK_W", "10"))
 # ffmpeg adeclick 'o' must stay in [50, 95] on this deployment.
 # Keep ESP32 behavior at historical 75 while allowing milder Pico default.
