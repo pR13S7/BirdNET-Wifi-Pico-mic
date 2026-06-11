@@ -343,21 +343,51 @@ The script automatically:
 - Detects your username and StreamData path
 - Masks `birdnet_recording.service` (conflicts with the bridge)
 
+### Common install options
+
+You can tune bridge processing directly from `install.sh`:
+
+```bash
+sudo bash install.sh --mode both \
+  --highpass-hz 160 \
+  --lowpass-hz 0 \
+  --notch-w 180 \
+  --notch-pico 0 \
+  --notch-esp32 0 \
+  --gentle
+```
+
+Useful flags:
+
+- `--highpass-hz HZ` — set `HIGHPASS_HZ` (default `200`, `0` disables)
+- `--lowpass-hz HZ` — set `LOWPASS_HZ` (default `0`, disabled)
+- `--notch-w HZ` — set `NOTCH_W` (default `180`)
+- `--notch-pico HZ` / `--notch-esp32 HZ` — set per-source `NOTCH_HZ`
+- `--gentle` — declick off + 1-pole high-pass (default behavior)
+- `--declick pico|esp32|both` — enable aggressive bridge declick + 2-pole HP for selected source(s)
+
 ### Telegram notifications (optional)
 
-If you already have a Telegram sender script (for example `/usr/local/bin/telegram-send.sh`),
-the bridge can send notifications when a microphone connects or disconnects.
+The installer now defaults to using `/usr/local/bin/telegram-send.sh`.
+If the file exists, bridge services send notifications when a microphone connects
+or disconnects. If the file is missing, install continues with notifications disabled.
 
-Install with explicit Telegram script path:
+Install with default Telegram script path:
 
 ```bash
 cd bridge/
-sudo bash install.sh --mode both --telegram-script /usr/local/bin/telegram-send.sh
+sudo bash install.sh --mode both
 ```
 
 The installer passes the script to both services (`birdnet-mic-bridge` and
 `birdnet-mic-bridge-2`), and each service reports its own source (`pico` or `esp32`)
 on every connect/disconnect event.
+
+To override the script path explicitly:
+
+```bash
+sudo bash install.sh --mode both --telegram-script /path/to/telegram-send.sh
+```
 
 Example `telegram-send.sh` content:
 
@@ -417,7 +447,9 @@ sudo bash install.sh --uninstall
 
 ### Bridge tuning (environment variables)
 
-The bridge service reads these variables from its systemd unit. Set them via `--declick`/`--notch-pico`/`--notch-esp32` in `install.sh`, or by editing the service file directly.
+The bridge service reads these variables from its systemd unit. Set them via
+`install.sh` flags (`--highpass-hz`, `--lowpass-hz`, `--notch-w`, `--notch-pico`,
+`--notch-esp32`, `--declick`, `--gentle`) or by editing the service file directly.
 
 | Variable | Default | Effect |
 |----------|---------|--------|
