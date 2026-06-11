@@ -23,8 +23,7 @@ Options:
   --recs-dir PATH     StreamData directory (default: ~USER/BirdSongs/StreamData)
   --mode MODE         Client mode: pico, esp32, or both (default: pico)
   --telegram-script PATH
-                      Optional telegram sender script (default: auto-detect
-                      /usr/local/bin/telegram-send.sh if executable)
+                      Telegram sender script (default: /usr/local/bin/telegram-send.sh)
   --notch-pico HZ     Notch-filter the Pico stream at HZ to remove the INMP441
                       idle tone (recommended: 3575; 0 = off, default)
   --notch-esp32 HZ    Notch-filter the ESP32 stream at HZ (recommended: 3575;
@@ -54,7 +53,9 @@ RECS_DIR_OVERRIDE=""
 MODE="pico"
 NOTCH_PICO="0"
 NOTCH_ESP32="0"
-TELEGRAM_SCRIPT_OVERRIDE=""
+TELEGRAM_SCRIPT_DEFAULT="/usr/local/bin/telegram-send.sh"
+TELEGRAM_SCRIPT_OVERRIDE="$TELEGRAM_SCRIPT_DEFAULT"
+TELEGRAM_SCRIPT_EXPLICIT="0"
 # Gentle defaults (declick off, soft 1-pole high-pass). --declick re-enables
 # the aggressive ffmpeg click removal + steeper 2-pole high-pass per source.
 DECLICK_PICO="0"
@@ -68,7 +69,10 @@ while [[ $# -gt 0 ]]; do
         --user)         USER_OVERRIDE="$2"; shift 2 ;;
         --recs-dir)     RECS_DIR_OVERRIDE="$2"; shift 2 ;;
         --mode)         MODE="$2"; shift 2 ;;
-        --telegram-script) TELEGRAM_SCRIPT_OVERRIDE="$2"; shift 2 ;;
+        --telegram-script)
+            TELEGRAM_SCRIPT_OVERRIDE="$2"
+            TELEGRAM_SCRIPT_EXPLICIT="1"
+            shift 2 ;;
         --notch-pico)   NOTCH_PICO="$2"; shift 2 ;;
         --notch-esp32)  NOTCH_ESP32="$2"; shift 2 ;;
         --gentle)
@@ -171,13 +175,15 @@ info "  Recs dir: $RECS_DIR"
 TELEGRAM_SEND_CMD=""
 if [[ -n "$TELEGRAM_SCRIPT_OVERRIDE" ]]; then
     TELEGRAM_SEND_CMD="$TELEGRAM_SCRIPT_OVERRIDE"
-elif [[ -x "/usr/local/bin/telegram-send.sh" ]]; then
-    TELEGRAM_SEND_CMD="/usr/local/bin/telegram-send.sh"
 fi
 
 if [[ -n "$TELEGRAM_SEND_CMD" && ! -f "$TELEGRAM_SEND_CMD" ]]; then
-    error "Telegram script not found: $TELEGRAM_SEND_CMD"
-    exit 1
+    if [[ "$TELEGRAM_SCRIPT_EXPLICIT" == "1" ]]; then
+        error "Telegram script not found: $TELEGRAM_SEND_CMD"
+        exit 1
+    fi
+    warn "Default telegram script not found at $TELEGRAM_SEND_CMD; notifications disabled."
+    TELEGRAM_SEND_CMD=""
 fi
 
 if [[ -n "$TELEGRAM_SEND_CMD" ]]; then
