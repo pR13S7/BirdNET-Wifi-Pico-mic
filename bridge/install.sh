@@ -149,6 +149,10 @@ if [[ "$ACTION" == "uninstall" ]]; then
         info "Removed $INSTALL_DIR"
     fi
 
+    CRON_TAG="# birdnet-confidence-scheduler"
+    crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
+    info "Removed confidence scheduler cron jobs"
+
     if systemctl is-masked --quiet birdnet_recording.service 2>/dev/null; then
         systemctl unmask birdnet_recording.service
         info "Unmasked birdnet_recording.service"
@@ -284,6 +288,19 @@ if systemctl list-unit-files | grep -q birdnet_recording.service; then
         info "birdnet_recording.service already masked"
     fi
 fi
+
+# Install confidence scheduler cron jobs
+CONFIDENCE_SCRIPT="${INSTALL_DIR}/set_birdnet_confidence.sh"
+cp "$SCRIPT_DIR/set_birdnet_confidence.sh" "$CONFIDENCE_SCRIPT"
+chmod 755 "$CONFIDENCE_SCRIPT"
+info "Installed confidence scheduler to $CONFIDENCE_SCRIPT"
+
+CRON_TAG="# birdnet-confidence-scheduler"
+# Remove old entries if any
+crontab -l 2>/dev/null | grep -v "$CRON_TAG" | crontab - 2>/dev/null || true
+# Add new entries
+(crontab -l 2>/dev/null; echo "0 4 * * * $CONFIDENCE_SCRIPT 0.4 $CRON_TAG"; echo "0 21 * * * $CONFIDENCE_SCRIPT 0.7 $CRON_TAG") | crontab -
+info "Cron: CONFIDENCE=0.4 at 04:00, CONFIDENCE=0.7 at 21:00"
 
 # Check ffmpeg
 if ! command -v ffmpeg &>/dev/null; then
