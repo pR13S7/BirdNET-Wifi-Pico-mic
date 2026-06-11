@@ -460,6 +460,29 @@ Since the bridge writes WAV files directly to StreamData, BirdNET-Pi's analysis 
 - **Mask the built-in recording service** (install.sh does this automatically):
   `sudo systemctl mask birdnet_recording.service`
 
+### Confidence scheduler (day/night)
+
+Bird activity drops at night while insect and noise false positives increase. The installer sets up a cron job that automatically adjusts BirdNET-Pi's confidence threshold by time of day:
+
+| Time | CONFIDENCE | Rationale |
+|------|-----------|-----------|
+| 04:00–21:00 | `0.4` | Daytime — more birds active, allow weaker detections |
+| 21:00–04:00 | `0.7` | Nighttime — stricter filtering, fewer false positives |
+
+This is installed automatically by `install.sh`. To install manually:
+
+```bash
+sudo cp bridge/set_birdnet_confidence.sh /opt/birdnet-mic-bridge/
+sudo chmod 755 /opt/birdnet-mic-bridge/set_birdnet_confidence.sh
+(sudo crontab -l 2>/dev/null | grep -v "birdnet-confidence-scheduler"; \
+ echo "0 4 * * * /opt/birdnet-mic-bridge/set_birdnet_confidence.sh 0.4 # birdnet-confidence-scheduler"; \
+ echo "0 21 * * * /opt/birdnet-mic-bridge/set_birdnet_confidence.sh 0.7 # birdnet-confidence-scheduler") | sudo crontab -
+```
+
+The script updates `CONFIDENCE` in `/etc/birdnet/birdnet.conf` and restarts `birdnet_analysis.service`. Changes are logged to syslog (`journalctl -t birdnet-confidence`).
+
+To disable: `sudo crontab -l | grep -v birdnet-confidence-scheduler | sudo crontab -`
+
 ---
 
 ## 10. Running it
