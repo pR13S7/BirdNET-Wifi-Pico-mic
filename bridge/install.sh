@@ -28,6 +28,9 @@ Options:
                       idle tone (recommended: 3575; 0 = off, default)
   --notch-esp32 HZ    Notch-filter the ESP32 stream at HZ (recommended: 3575;
                       0 = off, default)
+  --notch-w HZ        Notch filter width in Hz (default: 180)
+  --highpass-hz HZ    High-pass cutoff in Hz (default: 200; 0 = off)
+  --lowpass-hz HZ     Low-pass cutoff in Hz (default: 0 = off)
   --gentle            Minimal bridge processing for all sources: ffmpeg
                       click removal off + soft 1-pole high-pass (this is the
                       default; flag just makes it explicit)
@@ -53,6 +56,9 @@ RECS_DIR_OVERRIDE=""
 MODE="pico"
 NOTCH_PICO="0"
 NOTCH_ESP32="0"
+NOTCH_W="180"
+HIGHPASS_HZ="200"
+LOWPASS_HZ="0"
 TELEGRAM_SCRIPT_DEFAULT="/usr/local/bin/telegram-send.sh"
 TELEGRAM_SCRIPT_OVERRIDE="$TELEGRAM_SCRIPT_DEFAULT"
 TELEGRAM_SCRIPT_EXPLICIT="0"
@@ -75,6 +81,9 @@ while [[ $# -gt 0 ]]; do
             shift 2 ;;
         --notch-pico)   NOTCH_PICO="$2"; shift 2 ;;
         --notch-esp32)  NOTCH_ESP32="$2"; shift 2 ;;
+        --notch-w)      NOTCH_W="$2"; shift 2 ;;
+        --highpass-hz)  HIGHPASS_HZ="$2"; shift 2 ;;
+        --lowpass-hz)   LOWPASS_HZ="$2"; shift 2 ;;
         --gentle)
             DECLICK_PICO="0"; HP_POLES_PICO="1"
             DECLICK_ESP32="0"; HP_POLES_ESP32="1"
@@ -224,6 +233,9 @@ install_service() {
     local notch_hz="${5:-0}"
     local declick="${6:-0}"
     local hp_poles="${7:-1}"
+    local notch_w="${8:-180}"
+    local highpass_hz="${9:-200}"
+    local lowpass_hz="${10:-0}"
     local svc_file="/etc/systemd/system/${svc_name}.service"
     local source_label="$source_tag"
     local telegram_env=""
@@ -258,8 +270,11 @@ Environment=SOURCE_TAG=${source_tag}
 Environment=SOURCE_LABEL=${source_label}
 Environment=SERVICE_NAME=${svc_name}
 Environment=NOTCH_HZ=${notch_hz}
+Environment=NOTCH_W=${notch_w}
 Environment=DECLICK_ENABLE=${declick}
+Environment=HIGHPASS_HZ=${highpass_hz}
 Environment=HIGHPASS_POLES=${hp_poles}
+Environment=LOWPASS_HZ=${lowpass_hz}
 ${telegram_env}
 Restart=always
 RestartSec=5
@@ -267,18 +282,18 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
-    info "Created $svc_file (port $port, ${input_rate}Hz, tag=${source_tag}, notch=${notch_hz}Hz, declick=${declick_label}, hp_poles=${hp_poles})"
+    info "Created $svc_file (port $port, ${input_rate}Hz, tag=${source_tag}, notch=${notch_hz}Hz, notch_w=${notch_w}Hz, declick=${declick_label}, hp=${highpass_hz}Hz/${hp_poles}-pole, lowpass=${lowpass_hz}Hz)"
     systemctl enable "$svc_name"
     systemctl restart "$svc_name"
     info "Service $svc_name enabled and started"
 }
 
 if [[ "$MODE" == "pico" || "$MODE" == "both" ]]; then
-    install_service "$SERVICE_NAME" 5005 16000 "pico" "$NOTCH_PICO" "$DECLICK_PICO" "$HP_POLES_PICO"
+    install_service "$SERVICE_NAME" 5005 16000 "pico" "$NOTCH_PICO" "$DECLICK_PICO" "$HP_POLES_PICO" "$NOTCH_W" "$HIGHPASS_HZ" "$LOWPASS_HZ"
 fi
 
 if [[ "$MODE" == "esp32" || "$MODE" == "both" ]]; then
-    install_service "${SERVICE_NAME}-2" 5006 48000 "esp32" "$NOTCH_ESP32" "$DECLICK_ESP32" "$HP_POLES_ESP32"
+    install_service "${SERVICE_NAME}-2" 5006 48000 "esp32" "$NOTCH_ESP32" "$DECLICK_ESP32" "$HP_POLES_ESP32" "$NOTCH_W" "$HIGHPASS_HZ" "$LOWPASS_HZ"
 fi
 
 systemctl daemon-reload
